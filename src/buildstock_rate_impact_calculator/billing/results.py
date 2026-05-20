@@ -10,6 +10,23 @@ from __future__ import annotations
 import polars as pl
 from typing import Optional
 
+# Columns that represent per-building bill amounts (used for aggregation)
+_BILL_COLUMNS = (
+    "annual_bill",
+    "natural_gas_bill",
+    "propane_bill",
+    "fuel_oil_bill",
+    "total_energy_bill",
+)
+
+# Non-grouping, non-bill metadata columns excluded from the group-by selector
+_META_COLUMNS = frozenset({
+    "bldg_id", "upgrade", "scenario",
+    "annual_energy_kwh", "average_rate_ct_kwh", "monthly_bills",
+    "error", "baseline_bill", "bill_diff",
+    "natural_gas_rate_name", "propane_rate_name", "fuel_oil_rate_name",
+} | set(_BILL_COLUMNS))
+
 
 def summarize_bills(
     results_df: pl.DataFrame,
@@ -30,6 +47,7 @@ def summarize_bills(
           - group_by column (if provided)
           - mean_annual_bill, median_annual_bill, total_annual_bill
           - mean_annual_energy_kwh (if column present)
+          - mean/total for fuel bill columns (if present)
           - count
     """
     if "upgrade" not in results_df.columns:
@@ -37,7 +55,6 @@ def summarize_bills(
     if "annual_bill" not in results_df.columns:
         raise ValueError("results_df must contain an 'annual_bill' column.")
 
-    # Only aggregate non-null rows
     df = results_df.filter(pl.col("annual_bill").is_not_null())
 
     group_keys = ["upgrade"]
@@ -54,6 +71,12 @@ def summarize_bills(
     ]
     if "annual_energy_kwh" in df.columns:
         agg_exprs.append(pl.col("annual_energy_kwh").mean().alias("mean_annual_energy_kwh"))
+
+    # Aggregate fuel bill columns when present
+    for fuel_col in ("natural_gas_bill", "propane_bill", "fuel_oil_bill", "total_energy_bill"):
+        if fuel_col in df.columns:
+            agg_exprs.append(pl.col(fuel_col).mean().alias(f"mean_{fuel_col}"))
+            agg_exprs.append(pl.col(fuel_col).sum().alias(f"total_{fuel_col}"))
 
     return df.group_by(group_keys).agg(agg_exprs).sort(group_keys)
 
