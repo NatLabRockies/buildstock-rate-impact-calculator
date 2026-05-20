@@ -16,12 +16,13 @@ import polars as pl
 import streamlit as st
 
 from buildstock_rate_impact_calculator.ui.state import AppState
+from buildstock_rate_impact_calculator.data.buildstock_manager import BuildStockDataManager
 from buildstock_rate_impact_calculator.data.upgrade_labels import get_upgrade_label
 
 
-def _scenario_display(dataset_type: str, upgrade_id: int) -> str:
+def _scenario_display(base_uri: str, upgrade_id: int) -> str:
     try:
-        label = get_upgrade_label(dataset_type, upgrade_id)
+        label = get_upgrade_label(base_uri, upgrade_id)
     except Exception:
         label = f"Upgrade {upgrade_id}"
     return label if upgrade_id == 0 else f"Upgrade {upgrade_id}: {label}"
@@ -44,19 +45,19 @@ def render_results_page(app_state: AppState) -> None:
         return
 
     # ── Add human-readable scenario labels ───────────────────────────────────
+    _config_key = f"{app_state.dataset_type}_{app_state.release}"
+    _base_uri = BuildStockDataManager.DATASET_CONFIGS[_config_key].base_uri
     df = df.with_columns(
         pl.col("upgrade").map_elements(
-            lambda u: _scenario_display(app_state.dataset_type, u),
+            lambda u: _scenario_display(_base_uri, u),
             return_dtype=pl.Utf8,
         ).alias("scenario")
     )
 
     # ── Group-by selector ─────────────────────────────────────────────────────
     st.subheader("Grouping")
-    available_groups = [c for c in df.columns if c not in (
-        "bldg_id", "upgrade", "scenario", "annual_bill", "annual_energy_kwh",
-        "average_rate_ct_kwh", "monthly_bills", "error", "baseline_bill", "bill_diff"
-    )]
+    from buildstock_rate_impact_calculator.billing.results import _META_COLUMNS
+    available_groups = [c for c in df.columns if c not in _META_COLUMNS]
     group_options = ["None"] + available_groups
     chosen_group = st.selectbox(
         "Group results by",
@@ -79,7 +80,7 @@ def render_results_page(app_state: AppState) -> None:
         # Add scenario labels
         summary = summary.with_columns(
             pl.col("upgrade").map_elements(
-                lambda u: _scenario_display(app_state.dataset_type, u),
+                lambda u: _scenario_display(_base_uri, u),
                 return_dtype=pl.Utf8,
             ).alias("scenario")
         )
@@ -87,6 +88,13 @@ def render_results_page(app_state: AppState) -> None:
         if group_col:
             display_cols = [group_col] + display_cols
         display_cols += ["mean_annual_bill", "median_annual_bill", "total_annual_bill", "count"]
+        # Include fuel/total bill summaries if present
+        for extra in (
+            "mean_natural_gas_bill", "mean_propane_bill", "mean_fuel_oil_bill",
+            "mean_total_energy_bill", "total_total_energy_bill",
+        ):
+            if extra in summary.columns:
+                display_cols.append(extra)
         display_cols = [c for c in display_cols if c in summary.columns]
         st.dataframe(
             summary.select(display_cols).to_pandas(),
@@ -95,6 +103,39 @@ def render_results_page(app_state: AppState) -> None:
         )
     except Exception as exc:
         st.error(f"Failed to summarize bills: {exc}")
+
+    # ── Fuel cost breakdown ───────────────────────────────────────────────────
+    fuel_bill_cols = [c for c in df.columns if c in (
+        "natural_gas_bill", "propane_bill", "fuel_oil_bill", "total_energy_bill"
+    )]
+    if fuel_bill_cols:
+        st.divider()
+        st.subheader("Energy Cost Breakdown")
+        fuel_labels = {
+            "annual_bill": "Electricity",
+            "natural_gas_bill": "Natural Gas",
+            "propane_bill": "Propane",
+            "fuel_oil_bill": "Fuel Oil",
+            "total_energy_bill": "Total Energy",
+        }
+        breakdown_cols = ["annual_bill"] + fuel_bill_cols
+        breakdown_present = [c for c in breakdown_cols if c in df.columns]
+        try:
+            # Per-scenario mean breakdown table
+            grp_keys = ["upgrade", "scenario"] if "scenario" in df.columns else ["upgrade"]
+            agg = df.group_by(grp_keys).agg([
+                pl.col(c).mean().alias(fuel_labels[c]) for c in breakdown_present
+            ]).sort("upgrade")
+            st.dataframe(agg.to_pandas(), width="stretch", hide_index=True)
+
+            # Rate names applied (if available)
+            rate_name_cols = [c for c in df.columns if c.endswith("_rate_name")]
+            if rate_name_cols:
+                st.caption("Rates applied to fuel bills:")
+                sample = df.select(["upgrade"] + rate_name_cols).unique(subset=["upgrade"]).sort("upgrade")
+                st.dataframe(sample.to_pandas(), hide_index=True)
+        except Exception as exc:
+            st.error(f"Fuel breakdown error: {exc}")
 
     st.divider()
 

@@ -29,11 +29,6 @@ def _format_bytes(n: int) -> str:
 
 
 def _urdb_key_required(rate_assignments: dict) -> bool:
-    """
-    Return True if any assigned rate config is a URDB stub (has a 'label' but
-    lacks 'energyratestructure'), meaning the full rate data would need to be
-    fetched from URDB during the calculation pipeline.
-    """
     for rate_config in rate_assignments.values():
         if not isinstance(rate_config, dict):
             continue
@@ -44,6 +39,99 @@ def _urdb_key_required(rate_assignments: dict) -> bool:
 
 def _scenario_key(upgrade_id: int) -> str:
     return "baseline" if upgrade_id == 0 else f"upgrade_{upgrade_id}"
+
+
+def _calculate_fuel_bills(
+    mgr,
+    building_ids: list,
+    upgrade_id: int,
+    fuel_rate_assignments_for_scenario: dict,
+    tracker: ProgressTracker,
+) -> pl.DataFrame | None:
+    """Load upgrade metadata and calculate fuel bills for all buildings.
+
+    Returns a Polars DataFrame with columns:
+        bldg_id, upgrade,
+        natural_gas_bill, natural_gas_rate_name,
+        propane_bill,      propane_rate_name,
+        fuel_oil_bill,     fuel_oil_rate_name
+    or None if no fuel data was available.
+    """
+    from buildstock_rate_impact_calculator.rates.fuel_rate import (
+        FUEL_TYPES, calculate_fuel_bill,
+    )
+
+    fuel_type_columns: list[tuple[str, str, str | None, str | None]] = []
+    # (fuel_type, mode, column_name, rate_dict_or_None)
+    for ft in FUEL_TYPES:
+        energy_col, bill_col = mgr.get_fuel_columns_for_type(ft)
+        rate_dict = fuel_rate_assignments_for_scenario.get(ft)  # None = dataset default
+        if rate_dict is not None and energy_col:
+            fuel_type_columns.append((ft, "rate", energy_col, rate_dict))
+        elif rate_dict is None and bill_col:
+            fuel_type_columns.append((ft, "default", bill_col, None))
+        # If neither column exists for this fuel type, skip silently
+
+    if not fuel_type_columns:
+        return None
+
+    needed_cols = [mgr.config.building_id_column] + [col for _, _, col, _ in fuel_type_columns]
+
+    try:
+        upgrade_meta_uri = mgr.get_metadata_uri_for_upgrade(upgrade_id)
+        tracker.update(0, message=f"Loading fuel/default bill data for upgrade {upgrade_id}…")
+
+        if mgr.config.metadata_structure == "parquet":
+            # Load only needed columns if possible
+            import polars as pl
+            try:
+                available = list(pl.scan_parquet(upgrade_meta_uri).collect_schema().keys())
+                cols_to_load = [c for c in needed_cols if c in available]
+                upgrade_meta = pl.scan_parquet(upgrade_meta_uri).select(cols_to_load).collect()
+            except Exception:
+                upgrade_meta = pl.read_parquet(upgrade_meta_uri)
+        else:
+            # For non-parquet (e.g. ComStock csv.gz), load full metadata — expensive but necessary
+            upgrade_meta = mgr.load_metadata(force_reload=False)  # use cached baseline as fallback
+
+        # Filter to selected buildings
+        bldg_col = mgr.config.building_id_column
+        upgrade_meta = upgrade_meta.filter(pl.col(bldg_col).is_in(building_ids))
+
+    except Exception as exc:
+        tracker.update(0, message=f"Warning: Could not load fuel metadata for upgrade {upgrade_id}: {exc}")
+        return None
+
+    # Build result rows
+    rows: list[dict] = []
+    for row in upgrade_meta.iter_rows(named=True):
+        bldg_id = row[mgr.config.building_id_column]
+        result_row: dict = {"bldg_id": bldg_id, "upgrade": upgrade_id}
+
+        for ft, mode, col_name, rate_dict in fuel_type_columns:
+            if col_name not in row:
+                result_row[f"{ft}_bill"] = None
+                result_row[f"{ft}_rate_name"] = None
+                continue
+
+            raw_val = row.get(col_name)
+            value = float(raw_val) if raw_val is not None else 0.0
+
+            if mode == "rate":
+                bill_result = calculate_fuel_bill(value, rate_dict)
+                result_row[f"{ft}_bill"] = bill_result["annual_fuel_bill"]
+                result_row[f"{ft}_rate_name"] = bill_result["rate_name"]
+            else:
+                # Dataset default — raw value is already an annual bill in USD
+                result_row[f"{ft}_bill"] = value
+                result_row[f"{ft}_rate_name"] = "dataset default"
+
+        rows.append(result_row)
+
+    if not rows:
+        return None
+
+    return pl.DataFrame(rows)
 
 
 def _run_pipeline(
@@ -88,7 +176,6 @@ def _run_pipeline(
         total_downloads = len(building_ids) * len(app_state.selected_upgrades)
         ts_dir = output_dir / "timeseries"
 
-        # Check how many files are already on disk
         cached_keys = {
             f"{bldg}_{upg}"
             for bldg in building_ids
@@ -106,7 +193,7 @@ def _run_pipeline(
             )
             tracker.update(total_downloads, message=f"Loaded {len(ts_data)} cached files.")
         else:
-            tracker._total = total_downloads  # Update total now that we know it
+            tracker._total = total_downloads
 
             def dl_progress(done, total, msg=""):
                 tracker.update(completed=1, message=msg)
@@ -127,7 +214,7 @@ def _run_pipeline(
             tracker.error("No timeseries data was downloaded.")
             return
 
-        # ── calculate bills ───────────────────────────────────────────────────
+        # ── calculate electricity bills ───────────────────────────────────────
         from buildstock_rate_impact_calculator.billing.load_profile_utils import HOURS_PER_YEAR
 
         load_column = mgr.config.default_load_column
@@ -137,10 +224,10 @@ def _run_pipeline(
             scenario_key = _scenario_key(upgrade_id)
             rate_config = app_state.rate_assignments.get(scenario_key)
             if rate_config is None:
-                tracker.update(0, message=f"No rate assigned for {scenario_key}, skipping.")
+                tracker.update(0, message=f"No electricity rate assigned for {scenario_key}, skipping.")
                 continue
 
-            tracker.update(0, message=f"Calculating bills for upgrade {upgrade_id}…")
+            tracker.update(0, message=f"Calculating electricity bills for upgrade {upgrade_id}…")
             tracker._total += len(building_ids)
 
             load_records = []
@@ -152,7 +239,6 @@ def _run_pipeline(
                 if load_column not in df.columns:
                     continue
                 values = df[load_column].to_numpy()
-                # Convert 15-min to hourly if needed
                 if len(values) == HOURS_PER_YEAR * 4:
                     values = values.reshape(-1, 4).mean(axis=1)
                 elif len(values) != HOURS_PER_YEAR:
@@ -173,17 +259,49 @@ def _run_pipeline(
                 )
                 all_results.append(result_df)
             except Exception as exc:
-                tracker.update(0, message=f"Billing error for upgrade {upgrade_id}: {exc}")
+                tracker.update(0, message=f"Electricity billing error for upgrade {upgrade_id}: {exc}")
 
-        if all_results:
-            combined = pl.concat(all_results)
-            result_store["df"] = combined
-            # Save to disk
-            out_csv = output_dir / "bill_results.csv"
-            combined.write_csv(out_csv)
-            tracker.done(message=f"Done! Results saved to {out_csv}")
-        else:
-            tracker.error("No bill results were calculated.")
+        if not all_results:
+            tracker.error("No electricity bill results were calculated.")
+            return
+
+        combined = pl.concat(all_results)
+
+        # ── calculate fuel bills ──────────────────────────────────────────────
+        fuel_rate_assignments = getattr(app_state, "fuel_rate_assignments", {})
+        fuel_frames: list[pl.DataFrame] = []
+
+        for upgrade_id in app_state.selected_upgrades:
+            scenario_key = _scenario_key(upgrade_id)
+            fuel_rates_for_scenario = fuel_rate_assignments.get(scenario_key, {})
+
+            fuel_df = _calculate_fuel_bills(
+                mgr=mgr,
+                building_ids=building_ids,
+                upgrade_id=upgrade_id,
+                fuel_rate_assignments_for_scenario=fuel_rates_for_scenario,
+                tracker=tracker,
+            )
+            if fuel_df is not None:
+                fuel_frames.append(fuel_df)
+
+        if fuel_frames:
+            all_fuel = pl.concat(fuel_frames)
+            # Left-join fuel data onto electricity results
+            combined = combined.join(all_fuel, on=["bldg_id", "upgrade"], how="left")
+
+        # ── compute total energy bill ─────────────────────────────────────────
+        fuel_bill_cols = [c for c in combined.columns if c.endswith("_bill") and c != "annual_bill"]
+        if fuel_bill_cols:
+            total_expr = pl.col("annual_bill").fill_null(0.0)
+            for fc in fuel_bill_cols:
+                total_expr = total_expr + pl.col(fc).fill_null(0.0)
+            combined = combined.with_columns(total_expr.alias("total_energy_bill"))
+
+        result_store["df"] = combined
+        out_csv = output_dir / "bill_results.csv"
+        combined.write_csv(out_csv)
+        tracker.done(message=f"Done! Results saved to {out_csv}")
 
     except Exception as exc:
         tracker.error(f"Pipeline failed: {exc}")

@@ -114,7 +114,7 @@ st.markdown(
 
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "1 · Dataset", "2 · Geography", "3 · Building Filters",
-    "4 · Rates", "5 · Run", "6 · Results"
+    "4 · Energy Rates", "5 · Run", "6 · Results"
 ])
 
 with tab1:

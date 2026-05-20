@@ -34,6 +34,9 @@ class AppState:
     # ── Rate configuration ───────────────────────────────────────────────────
     # Maps scenario key (e.g. "baseline", "upgrade_1") → rate config dict
     rate_assignments: dict[str, dict] = field(default_factory=dict)
+    # Maps scenario key → {fuel_type → fuel rate dict (or None for dataset default)}
+    # fuel_type is one of "natural_gas", "propane", "fuel_oil"
+    fuel_rate_assignments: dict[str, dict[str, dict]] = field(default_factory=dict)
 
     # ── API / credentials ────────────────────────────────────────────────────
     urdb_api_key: str = ""
@@ -63,6 +66,7 @@ class AppState:
         "selected_county_ids",
         "selected_puma_ids",
         "rate_assignments",
+        "fuel_rate_assignments",
         "urdb_api_key",
         "output_dir",
     )
