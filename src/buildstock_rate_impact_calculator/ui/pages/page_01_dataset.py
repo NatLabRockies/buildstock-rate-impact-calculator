@@ -9,7 +9,7 @@ Lets the user choose:
 from __future__ import annotations
 import streamlit as st
 from buildstock_rate_impact_calculator.data.buildstock_manager import BuildStockDataManager
-from buildstock_rate_impact_calculator.data.upgrade_labels import get_upgrade_label
+from buildstock_rate_impact_calculator.data.upgrade_labels import fetch_upgrade_labels
 from buildstock_rate_impact_calculator.ui.state import AppState
 
 # Human-readable display names for dataset versions
@@ -58,8 +58,10 @@ def render_dataset_page(app_state: AppState) -> None:
     config = BuildStockDataManager.DATASET_CONFIGS[selected_key]
     upgrade_ids = config.supported_upgrades
 
-    # Build label list: "0 – Baseline", "1 – Basic Enclosure", etc.
-    upgrade_labels = [f"{u} – {get_upgrade_label(app_state.dataset_type, u)}" for u in upgrade_ids]
+    _labels = fetch_upgrade_labels(config.base_uri)
+
+    # Build label list: "0 – Baseline", "1 – ENERGY STAR heat pump…", etc.
+    upgrade_labels = [f"{u} – {_labels.get(u, f'Upgrade {u}')}" for u in upgrade_ids]
 
     # Always include baseline (0); user selects additional upgrades
     st.caption(
@@ -69,7 +71,7 @@ def render_dataset_page(app_state: AppState) -> None:
 
     # Pre-select currently stored upgrades
     current_selected_labels = [
-        f"{u} – {get_upgrade_label(app_state.dataset_type, u)}"
+        f"{u} – {_labels.get(u, f'Upgrade {u}')}"
         for u in app_state.selected_upgrades
         if u in upgrade_ids
     ]
@@ -98,5 +100,5 @@ def render_dataset_page(app_state: AppState) -> None:
         st.metric("Scenarios Selected", len(selected_ids))
 
     st.success(
-        f"Selected: {', '.join(str(u) + ' – ' + get_upgrade_label(app_state.dataset_type, u) for u in selected_ids)}"
+        f"Selected: {', '.join(str(u) + ' – ' + _labels.get(u, f'Upgrade {u}') for u in selected_ids)}"
     )

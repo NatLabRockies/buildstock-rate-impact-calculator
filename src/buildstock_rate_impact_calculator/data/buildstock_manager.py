@@ -55,6 +55,13 @@ class DatasetConfig:
     state_column: str
     expected_resolution_minutes: int
     supported_upgrades: List[int]
+    # Fuel energy consumption columns (annual kWh per building)
+    natural_gas_energy_column: Optional[str] = None
+    natural_gas_bill_column: Optional[str] = None
+    propane_energy_column: Optional[str] = None
+    propane_bill_column: Optional[str] = None
+    fuel_oil_energy_column: Optional[str] = None
+    fuel_oil_bill_column: Optional[str] = None
 
 
 class BuildStockDataManager:
@@ -86,17 +93,29 @@ class BuildStockDataManager:
             building_id_column="bldg_id",
             state_column="in.state",
             expected_resolution_minutes=15,
-            supported_upgrades=list(range(17))  # 0-16 for ResStock
+            supported_upgrades=list(range(17)),  # 0-16 for ResStock
+            natural_gas_energy_column="out.natural_gas.total.energy_consumption.kwh",
+            natural_gas_bill_column="out.bills.natural_gas.usd",
+            propane_energy_column="out.propane.total.energy_consumption.kwh",
+            propane_bill_column="out.bills.propane.usd",
+            fuel_oil_energy_column="out.fuel_oil.total.energy_consumption.kwh",
+            fuel_oil_bill_column="out.bills.fuel_oil.usd",
         ),
         'resstock_2025_release_1': DatasetConfig(
             base_uri="https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/2025/resstock_amy2018_release_1",
             metadata_structure="parquet",
             timeseries_structure="by_state",
-            default_load_column="out.electricity.total.energy_consumption",
+            default_load_column="out.electricity.total.energy_consumption..kwh",
             building_id_column="bldg_id",
             state_column="in.state",
             expected_resolution_minutes=15,
-            supported_upgrades=list(range(17))  # 0-16 for ResStock
+            supported_upgrades=list(range(17)),  # 0-16 for ResStock
+            natural_gas_energy_column="out.natural_gas.total.energy_consumption..kwh",
+            natural_gas_bill_column="out.utility_bills.bills.natural_gas_bill..usd",
+            propane_energy_column="out.propane.total.energy_consumption..kwh",
+            propane_bill_column="out.utility_bills.propane_bills..usd",
+            fuel_oil_energy_column="out.fuel_oil.total.energy_consumption..kwh",
+            fuel_oil_bill_column="out.utility_bills.fuel_oil_bill..usd",
         ),
         'comstock_2024_release_2': DatasetConfig(
             base_uri="https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/2024/comstock_amy2018_release_2",
@@ -106,7 +125,11 @@ class BuildStockDataManager:
             building_id_column="bldg_id",
             state_column="in.state",
             expected_resolution_minutes=15,
-            supported_upgrades=list(range(40))  # 0-39 for ComStock
+            supported_upgrades=list(range(40)),  # 0-39 for ComStock
+            natural_gas_energy_column="out.natural_gas.total.energy_consumption..kwh",
+            propane_energy_column="out.propane.total.energy_consumption..kwh",
+            fuel_oil_energy_column="out.fuel_oil.total.energy_consumption..kwh",
+            # TODO: Add ComStock default bill columns once column names are confirmed
         )
     }
     
@@ -191,13 +214,63 @@ class BuildStockDataManager:
     def _get_default_metadata_uri(self) -> str:
         """Get default metadata URI based on dataset configuration."""
         if self.dataset_type == 'resstock':
-            return f"{self.config.base_uri}/metadata_and_annual_results/national/parquet/baseline_metadata_and_annual_results.parquet"
+            if self.release == '2024_release_2':
+                return f"{self.config.base_uri}/metadata_and_annual_results/national/parquet/baseline_metadata_and_annual_results.parquet"
+            elif self.release == '2025_release_1':
+                return f"{self.config.base_uri}/metadata_and_annual_results/national/full/parquet/upgrade0.parquet"
         elif self.dataset_type == 'comstock':
             # Note: ComStock typically requires geographic specification
             # This is a fallback - users should provide specific metadata_uri for ComStock
             return f"{self.config.base_uri}/metadata_and_annual_results/national/basic/csv/baseline_basic.csv.gz"
         else:
             raise ValueError(f"Unknown dataset type: {self.dataset_type}")
+
+    def get_metadata_uri_for_upgrade(self, upgrade_id: int) -> str:
+        """Return the metadata URI for a specific upgrade.
+
+        Args:
+            upgrade_id: Upgrade index (0 = baseline).
+
+        Returns:
+            String URI pointing to the upgrade's metadata/annual-results file.
+        """
+        if upgrade_id == 0:
+            return self.metadata_uri
+        if self.dataset_type == 'resstock':
+            return (
+                f"{self.config.base_uri}/metadata_and_annual_results/national/parquet/"
+                f"upgrade{upgrade_id:02d}_metadata_and_annual_results.parquet"
+            )
+        elif self.dataset_type == 'comstock':
+            return (
+                f"{self.config.base_uri}/metadata_and_annual_results/national/basic/csv/"
+                f"upgrade{upgrade_id:02d}_basic.csv.gz"
+            )
+        else:
+            raise ValueError(f"Unknown dataset type: {self.dataset_type}")
+
+    def get_fuel_columns_for_type(self, fuel_type: str) -> tuple[Optional[str], Optional[str]]:
+        """Return (energy_column, bill_column) for the given fuel type from this dataset's config.
+
+        Args:
+            fuel_type: One of "natural_gas", "propane", "fuel_oil".
+
+        Returns:
+            Tuple of (energy_column_name, bill_column_name); either may be None if
+            the dataset does not provide that column.
+        """
+        col_map = {
+            "natural_gas": ("natural_gas_energy_column", "natural_gas_bill_column"),
+            "propane":      ("propane_energy_column",     "propane_bill_column"),
+            "fuel_oil":     ("fuel_oil_energy_column",    "fuel_oil_bill_column"),
+        }
+        if fuel_type not in col_map:
+            raise ValueError(f"Unknown fuel type: {fuel_type}")
+        energy_attr, bill_attr = col_map[fuel_type]
+        return (
+            getattr(self.config, energy_attr, None),
+            getattr(self.config, bill_attr, None),
+        )
     
     def _deduplicate_columns(self, requested_columns: List[str]) -> List[str]:
         """
