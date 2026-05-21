@@ -141,7 +141,7 @@ class BuildStockDataManager:
         cache_enabled: bool = True,
         cache_dir: Optional[Path] = None,
         log_file: Optional[Path] = None,
-        max_workers: int = 16
+        max_workers: int = 32
     ):
         """
         Initialize the BuildStock data manager.
@@ -716,45 +716,72 @@ class BuildStockDataManager:
         total = len(tasks)
         results: Dict[str, pl.DataFrame] = {}
         written_files: List[Path] = []
+        done_count = 0
+        lock = threading.Lock()
 
-        for done_count, (building_id, upgrade, uri) in enumerate(tasks):
-            # Check for cancellation before each download
+        def _fetch_one(
+            building_id: Any, upgrade: int, uri: str
+        ) -> Optional[Tuple[str, pl.DataFrame, Path]]:
+            """Download, aggregate, and write a single building/upgrade file."""
             if cancel_event is not None and cancel_event.is_set():
-                self.logger.info("Download cancelled — cleaning up written files.")
-                for f in written_files:
+                return None
+            df = (
+                pl.scan_parquet(uri)
+                .select([timestamp_column, load_col])
+                .group_by_dynamic(
+                    pl.col(timestamp_column),
+                    every='1h',
+                    closed='right',
+                    label='right',
+                )
+                .agg(pl.col(load_col).sum())
+                .collect()
+            )
+            out_path = output_dir / f"{building_id}_{upgrade}.parquet"
+            df.write_parquet(out_path)
+            return f"{building_id}_{upgrade}", df, out_path
+
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            future_to_task = {
+                executor.submit(_fetch_one, bid, upg, uri): (bid, upg)
+                for bid, upg, uri in tasks
+            }
+
+            for future in as_completed(future_to_task):
+                # Check cancellation after each completed future
+                if cancel_event is not None and cancel_event.is_set():
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    self.logger.info("Download cancelled — cleaning up written files.")
+                    with lock:
+                        for f in written_files:
+                            try:
+                                f.unlink(missing_ok=True)
+                            except Exception:
+                                pass
+                    return {}
+
+                bid, upg = future_to_task[future]
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    self.logger.warning(f"Failed to download {bid}/{upg}: {exc}")
+                    continue
+
+                if result is None:
+                    continue
+
+                key, df, out_path = result
+                with lock:
+                    results[key] = df
+                    written_files.append(out_path)
+                    done_count += 1
+                    current = done_count
+
+                if progress_cb is not None:
                     try:
-                        f.unlink(missing_ok=True)
+                        progress_cb(current, total, f"Downloaded {bid} upgrade {upg}")
                     except Exception:
                         pass
-                return {}
-
-            try:
-                df = (
-                    pl.scan_parquet(uri)
-                    .select([timestamp_column, load_col])
-                    .group_by_dynamic(
-                        pl.col(timestamp_column),
-                        every='1h',
-                        closed='right',
-                        label='right',
-                    )
-                    .agg(pl.col(load_col).sum())
-                    .collect()
-                )
-                out_path = output_dir / f"{building_id}_{upgrade}.parquet"
-                df.write_parquet(out_path)
-                written_files.append(out_path)
-                key = f"{building_id}_{upgrade}"
-                results[key] = df
-            except Exception as exc:
-                self.logger.warning(f"Failed to download {building_id}/{upgrade}: {exc}")
-                continue
-
-            if progress_cb is not None:
-                try:
-                    progress_cb(done_count + 1, total, f"Downloaded {building_id} upgrade {upgrade}")
-                except Exception:
-                    pass
 
         return results
 
