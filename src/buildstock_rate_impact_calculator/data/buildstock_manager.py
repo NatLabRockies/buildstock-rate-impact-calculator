@@ -55,6 +55,10 @@ class DatasetConfig:
     state_column: str
     expected_resolution_minutes: int
     supported_upgrades: List[int]
+    # Metadata path components (relative to base_uri)
+    metadata_path: str = ""         # subdirectory under base_uri, e.g. "metadata_and_annual_results/national/parquet"
+    baseline_filename: str = ""     # filename for upgrade-0 / baseline parquet
+    upgrade_filename: str = ""      # filename template; use {upgrade_id:02d} for the zero-padded ID
     # Fuel energy consumption columns (annual kWh per building)
     natural_gas_energy_column: Optional[str] = None
     natural_gas_bill_column: Optional[str] = None
@@ -62,6 +66,11 @@ class DatasetConfig:
     propane_bill_column: Optional[str] = None
     fuel_oil_energy_column: Optional[str] = None
     fuel_oil_bill_column: Optional[str] = None
+
+
+# OEDI public bucket — HTTPS base used in DATASET_CONFIGS, S3 base for native access
+_OEDI_HTTPS_BASE = "https://oedi-data-lake.s3.amazonaws.com/"
+_OEDI_S3_BASE = "s3://oedi-data-lake/"
 
 
 class BuildStockDataManager:
@@ -83,6 +92,9 @@ class BuildStockDataManager:
         logger: Configured logger instance
     """
     
+    # storage_options passed to Polars for anonymous S3 access
+    _S3_ANON: Dict[str, Any] = {"aws_region": "us-west-2", "aws_skip_signature": "true"}
+
     # Pre-configured dataset specifications
     DATASET_CONFIGS = {
         'resstock_2024_release_2': DatasetConfig(
@@ -94,6 +106,9 @@ class BuildStockDataManager:
             state_column="in.state",
             expected_resolution_minutes=15,
             supported_upgrades=list(range(17)),  # 0-16 for ResStock
+            metadata_path="metadata_and_annual_results/national/parquet",
+            baseline_filename="baseline_metadata_and_annual_results.parquet",
+            upgrade_filename="upgrade{upgrade_id:02d}_metadata_and_annual_results.parquet",
             natural_gas_energy_column="out.natural_gas.total.energy_consumption.kwh",
             natural_gas_bill_column="out.bills.natural_gas.usd",
             propane_energy_column="out.propane.total.energy_consumption.kwh",
@@ -110,6 +125,9 @@ class BuildStockDataManager:
             state_column="in.state",
             expected_resolution_minutes=15,
             supported_upgrades=list(range(17)),  # 0-16 for ResStock
+            metadata_path="metadata_and_annual_results/national/full/parquet",
+            baseline_filename="upgrade0.parquet",
+            upgrade_filename="upgrade{upgrade_id:02d}.parquet",
             natural_gas_energy_column="out.natural_gas.total.energy_consumption..kwh",
             natural_gas_bill_column="out.utility_bills.bills.natural_gas_bill..usd",
             propane_energy_column="out.propane.total.energy_consumption..kwh",
@@ -119,13 +137,33 @@ class BuildStockDataManager:
         ),
         'comstock_2024_release_2': DatasetConfig(
             base_uri="https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/2024/comstock_amy2018_release_2",
-            metadata_structure="csv_gz_tar",
+            metadata_structure="parquet",
             timeseries_structure="by_state",
             default_load_column="out.electricity.total.energy_consumption",
             building_id_column="bldg_id",
             state_column="in.state",
             expected_resolution_minutes=15,
             supported_upgrades=list(range(40)),  # 0-39 for ComStock
+            metadata_path="metadata_and_annual_results_aggregates/national/basic/parquet",
+            baseline_filename="baseline_agg_basic.parquet",
+            upgrade_filename="upgrade{upgrade_id:02d}_agg_basic.parquet",
+            natural_gas_energy_column="out.natural_gas.total.energy_consumption..kwh",
+            propane_energy_column="out.propane.total.energy_consumption..kwh",
+            fuel_oil_energy_column="out.fuel_oil.total.energy_consumption..kwh",
+            # TODO: Add ComStock default bill columns once column names are confirmed
+        ),
+        'comstock_2025_release_3': DatasetConfig(
+            base_uri="https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/2025/comstock_amy2018_release_3",
+            metadata_structure="parquet",
+            timeseries_structure="by_state",
+            default_load_column="out.electricity.total.energy_consumption",
+            building_id_column="bldg_id",
+            state_column="in.state",
+            expected_resolution_minutes=15,
+            supported_upgrades=list(range(40)),  # 0-39 for ComStock
+            metadata_path="metadata_and_annual_results_aggregates/national/basic/parquet",
+            baseline_filename="upgrade0_agg_basic.parquet",
+            upgrade_filename="upgrade{upgrade_id}_agg_basic.parquet",
             natural_gas_energy_column="out.natural_gas.total.energy_consumption..kwh",
             propane_energy_column="out.propane.total.energy_consumption..kwh",
             fuel_oil_energy_column="out.fuel_oil.total.energy_consumption..kwh",
@@ -182,16 +220,16 @@ class BuildStockDataManager:
             self.cache_dir = cache_dir or Path("./buildstock_cache")
             self.cache_dir.mkdir(parents=True, exist_ok=True)
             self._setup_cache_structure()
-        
+
         # Set metadata URI
         if metadata_uri:
             self.metadata_uri = metadata_uri
         else:
             self.metadata_uri = self._get_default_metadata_uri()
-        
-        # Initialize filesystem for efficient S3 access
-        self.fs = fsspec.filesystem('https')
-        
+
+        # Anonymous S3 filesystem (used by legacy exists/open methods)
+        self.fs = fsspec.filesystem("s3", anon=True)
+
         # Initialize state storage
         self._metadata = None
         self._filtered_metadata = None
@@ -211,19 +249,24 @@ class BuildStockDataManager:
         for cache_subdir in [self.cache_metadata_dir, self.cache_timeseries_dir, self.cache_processed_dir]:
             cache_subdir.mkdir(parents=True, exist_ok=True)
     
+    @staticmethod
+    def _to_s3_uri(https_uri: str) -> str:
+        """Convert an OEDI HTTPS URI to a native S3 URI.
+
+        Example::
+
+            https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/...
+            → s3://oedi-data-lake/nrel-pds-building-stock/...
+        """
+        return https_uri.replace(_OEDI_HTTPS_BASE, _OEDI_S3_BASE)
+
     def _get_default_metadata_uri(self) -> str:
         """Get default metadata URI based on dataset configuration."""
-        if self.dataset_type == 'resstock':
-            if self.release == '2024_release_2':
-                return f"{self.config.base_uri}/metadata_and_annual_results/national/parquet/baseline_metadata_and_annual_results.parquet"
-            elif self.release == '2025_release_1':
-                return f"{self.config.base_uri}/metadata_and_annual_results/national/full/parquet/upgrade0.parquet"
-        elif self.dataset_type == 'comstock':
-            # Note: ComStock typically requires geographic specification
-            # This is a fallback - users should provide specific metadata_uri for ComStock
-            return f"{self.config.base_uri}/metadata_and_annual_results/national/basic/csv/baseline_basic.csv.gz"
-        else:
-            raise ValueError(f"Unknown dataset type: {self.dataset_type}")
+        uri = (
+            f"{self.config.base_uri}/{self.config.metadata_path}"
+            f"/{self.config.baseline_filename}"
+        )
+        return self._to_s3_uri(uri)
 
     def get_metadata_uri_for_upgrade(self, upgrade_id: int) -> str:
         """Return the metadata URI for a specific upgrade.
@@ -236,18 +279,9 @@ class BuildStockDataManager:
         """
         if upgrade_id == 0:
             return self.metadata_uri
-        if self.dataset_type == 'resstock':
-            return (
-                f"{self.config.base_uri}/metadata_and_annual_results/national/parquet/"
-                f"upgrade{upgrade_id:02d}_metadata_and_annual_results.parquet"
-            )
-        elif self.dataset_type == 'comstock':
-            return (
-                f"{self.config.base_uri}/metadata_and_annual_results/national/basic/csv/"
-                f"upgrade{upgrade_id:02d}_basic.csv.gz"
-            )
-        else:
-            raise ValueError(f"Unknown dataset type: {self.dataset_type}")
+        filename = self.config.upgrade_filename.format(upgrade_id=upgrade_id)
+        uri = f"{self.config.base_uri}/{self.config.metadata_path}/{filename}"
+        return self._to_s3_uri(uri)
 
     def get_fuel_columns_for_type(self, fuel_type: str) -> tuple[Optional[str], Optional[str]]:
         """Return (energy_column, bill_column) for the given fuel type from this dataset's config.
@@ -368,17 +402,26 @@ class BuildStockDataManager:
     def _load_metadata_parquet(self, columns: Optional[List[str]] = None) -> pl.DataFrame:
         """Load metadata from Parquet format (ResStock)."""
         self.logger.info(f"Loading Parquet metadata from: {self.metadata_uri}")
-        
+
         try:
             if columns:
-                # Deduplicate columns and ensure required columns are included
                 columns_to_load = self._deduplicate_columns(columns)
-                metadata = pl.scan_parquet(self.metadata_uri).select(columns_to_load).collect()
+                metadata = (
+                    pl.scan_parquet(
+                        self.metadata_uri,
+                        storage_options=self._S3_ANON
+                    )
+                    .select(columns_to_load)
+                    .collect()
+                )
             else:
-                metadata = pl.read_parquet(self.metadata_uri)
-            
+                metadata = pl.read_parquet(
+                    self.metadata_uri,
+                    storage_options=self._S3_ANON
+                )
+
             return metadata
-            
+
         except Exception as e:
             self.logger.error(f"Error loading Parquet metadata: {e}")
             raise
@@ -722,17 +765,20 @@ class BuildStockDataManager:
         def _fetch_one(
             building_id: Any, upgrade: int, uri: str
         ) -> Optional[Tuple[str, pl.DataFrame, Path]]:
-            """Download, aggregate, and write a single building/upgrade file."""
+            """Fetch two columns from S3 via Parquet projection, aggregate, write locally."""
             if cancel_event is not None and cancel_event.is_set():
                 return None
             df = (
-                pl.scan_parquet(uri)
+                pl.scan_parquet(
+                    uri,
+                    storage_options=self._S3_ANON
+                )
                 .select([timestamp_column, load_col])
                 .group_by_dynamic(
                     pl.col(timestamp_column),
-                    every='1h',
-                    closed='right',
-                    label='right',
+                    every="1h",
+                    closed="right",
+                    label="right",
                 )
                 .agg(pl.col(load_col).sum())
                 .collect()
@@ -861,11 +907,13 @@ class BuildStockDataManager:
             if state is None:
                 raise ValueError(f"Could not determine state for building {building_id}")
         
-        # Construct the URI
-        uri = (f"{self.config.base_uri}/timeseries_individual_buildings/"
-               f"{self.config.timeseries_structure}/upgrade={upgrade}/"
-               f"state={state}/{building_id}-{upgrade}.parquet")
-        
+        # Construct the URI as a native S3 URI for efficient access
+        uri = self._to_s3_uri(
+            f"{self.config.base_uri}/timeseries_individual_buildings/"
+            f"{self.config.timeseries_structure}/upgrade={upgrade}/"
+            f"state={state}/{building_id}-{upgrade}.parquet"
+        )
+
         return uri
     
     def load_and_prepare_profiles_efficient(
