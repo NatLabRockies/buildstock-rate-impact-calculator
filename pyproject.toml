@@ -28,6 +28,7 @@ ruff = "*"
 certifi = "*"
 python-dateutil = "*"
 aiohttp = "*"
+s3fs = "*"
 pip-system-certs = ">=5.3,<6"
 
 [tool.pixi.pypi-dependencies]
@@ -40,6 +41,11 @@ altair = "*"
 
 [tool.pixi.tasks]
 test = "pytest tests/ -v"
+test-integration = "pytest tests/ -v --integration -s"
 app = "streamlit run app.py"
 lint = "ruff check src/"
 fetch-utilities = "python scripts/fetch_utility_companies.py"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"
