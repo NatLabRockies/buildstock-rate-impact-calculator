@@ -95,7 +95,7 @@ with st.sidebar:
     col_save, col_load = st.columns(2)
 
     with col_save:
-        if st.button("Save", use_container_width=True, help="Save current settings to the config file"):
+        if st.button("Save", width='stretch', help="Save current settings to the config file"):
             try:
                 app_state.save_config(config_path_str)
                 st.success(f"Saved to `{config_path_str}`")
@@ -103,7 +103,7 @@ with st.sidebar:
                 st.error(f"Save failed: {exc}")
 
     with col_load:
-        if st.button("Load", use_container_width=True, help="Load settings from the config file"):
+        if st.button("Load", width='stretch', help="Load settings from the config file"):
             try:
                 loaded = app_state.load_config(config_path_str)
                 app_state.apply_config_dict(loaded.to_config_dict())

@@ -201,7 +201,7 @@ def render_urdb_search(api_key: str, dataset_type: str = "resstock") -> Optional
         for r in results
     ]
     df = pd.DataFrame(display_rows)
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.dataframe(df, width='stretch', hide_index=True)
 
     label_options = [r.get("label", "") for r in results if r.get("label")]
     name_options = [

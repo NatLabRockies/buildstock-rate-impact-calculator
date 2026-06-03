@@ -316,11 +316,11 @@ def _render_state_selection_view(current_states: list[str]) -> None:
     if chosen:
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("Select Counties", use_container_width=True, key="btn_select_counties"):
+            if st.button("Select Counties", width='stretch', key="btn_select_counties"):
                 st.session_state["_map_view_mode"] = "county"
                 st.rerun(scope="app")
         with col2:
-            if st.button("Select PUMAs", use_container_width=True, key="btn_select_pumas"):
+            if st.button("Select PUMAs", width='stretch', key="btn_select_pumas"):
                 st.session_state["_map_view_mode"] = "puma"
                 st.rerun(scope="app")
 
