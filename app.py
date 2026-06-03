@@ -130,6 +130,9 @@ with st.sidebar:
         except (json.JSONDecodeError, KeyError, TypeError) as exc:
             st.error(f"Upload failed: {exc}")
 
+    with st.sidebar.expander("🛠️ Debug Variables"):
+        st.write(st.session_state)
+        
 # ── Main content ──────────────────────────────────────────────────────────────
 st.title("BuildStock Rate Impact Calculator")
 st.markdown(
