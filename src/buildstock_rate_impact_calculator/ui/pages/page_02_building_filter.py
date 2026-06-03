@@ -30,6 +30,10 @@ def render_building_filter_page(app_state: AppState) -> None:
         st.warning("Please select a dataset on the Dataset tab first.")
         return
 
+    if not app_state.selected_upgrades:
+        st.warning("Please select one or more upgrade scenarios on the Dataset tab first.")
+        return
+
     # ── Load or reuse cached metadata ────────────────────────────────────────
     manager_key = f"mgr_{app_state.dataset_type}_{app_state.release}"
     metadata_key = f"metadata_{app_state.dataset_type}_{app_state.release}"

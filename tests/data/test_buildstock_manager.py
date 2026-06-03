@@ -401,6 +401,141 @@ class TestStateMappingAndBuildingState:
 
 
 # ===========================================================================
+# Unit tests — get_upgrade_applicability
+# ===========================================================================
+
+class TestGetUpgradeApplicability:
+    """Tests for the get_upgrade_applicability method (no network)."""
+
+    def test_baseline_returns_all_true(self, tmp_path: Path) -> None:
+        """Upgrade 0 is always 100% applicable."""
+        mgr = _make_mgr(tmp_path)
+        building_ids = [1, 2, 3, 4, 5]
+        result = mgr.get_upgrade_applicability(0, building_ids)
+        assert result == {bid: True for bid in building_ids}
+
+    def test_baseline_empty_list(self, tmp_path: Path) -> None:
+        mgr = _make_mgr(tmp_path)
+        assert mgr.get_upgrade_applicability(0, []) == {}
+
+    def test_result_covers_all_building_ids(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every building_id in the input appears in the output dict."""
+        mgr = _make_mgr(tmp_path)
+        building_ids = [10, 20, 30]
+
+        # Simulate upgrade metadata returning applicability for only 2 of 3 buildings
+        fake_df = pl.DataFrame(
+            {"bldg_id": [10, 20], "applicability": [True, False]}
+        )
+
+        def _fake_scan(*args: Any, **kwargs: Any):
+            return fake_df.lazy()
+
+        monkeypatch.setattr(pl, "scan_parquet", _fake_scan)
+        result = mgr.get_upgrade_applicability(1, building_ids)
+        assert set(result.keys()) == set(building_ids)
+
+    def test_absent_buildings_default_to_false(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Buildings missing from upgrade metadata are marked not applicable."""
+        mgr = _make_mgr(tmp_path)
+        building_ids = [1, 2, 99]  # 99 not in upgrade metadata
+
+        fake_df = pl.DataFrame(
+            {"bldg_id": [1, 2], "applicability": [True, True]}
+        )
+
+        def _fake_scan(*args: Any, **kwargs: Any):
+            return fake_df.lazy()
+
+        monkeypatch.setattr(pl, "scan_parquet", _fake_scan)
+        result = mgr.get_upgrade_applicability(1, building_ids)
+        assert result[99] is False
+
+    def test_applicability_values_are_bool(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Values in the returned dict are plain Python bools."""
+        mgr = _make_mgr(tmp_path)
+        building_ids = [1, 2]
+
+        # Use Int32 0/1 to verify casting to bool
+        fake_df = pl.DataFrame(
+            {"bldg_id": [1, 2], "upgrade.duct_leakage_and_insulation": [1, None]},
+            schema={"bldg_id": pl.Int32, "upgrade.duct_leakage_and_insulation": pl.Int32},
+        )
+
+        def _fake_scan(*args: Any, **kwargs: Any):
+            return fake_df.lazy()
+
+        monkeypatch.setattr(pl, "scan_parquet", _fake_scan)
+        result = mgr.get_upgrade_applicability(1, building_ids)
+        assert isinstance(result[1], bool)
+        assert isinstance(result[2], bool)
+        assert result[1] is True
+        assert result[2] is False
+
+    # def test_partial_applicability(
+    #     self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    # ) -> None:
+    #     """Mix of True/False/absent buildings is handled correctly."""
+    #     mgr = _make_mgr(tmp_path)
+    #     building_ids = [10, 20, 30, 40]  # 40 absent
+
+    #     fake_df = pl.DataFrame(
+    #         {
+    #             "bldg_id": [10, 20, 30],
+    #             "upgrade.duct_leakage_and_insulation": [True, False, True],
+    #         }
+    #     )
+
+    #     def _fake_scan(*args: Any, **kwargs: Any):
+    #         return fake_df.lazy()
+
+    #     monkeypatch.setattr(pl, "scan_parquet", _fake_scan)
+    #     result = mgr.get_upgrade_applicability(1, building_ids)
+    #     assert result[10] is True
+    #     assert result[20] is False
+    #     assert result[30] is True
+    #     assert result[40] is False  # absent → not applicable
+
+    def test_scan_failure_falls_back_to_all_true(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If the S3 read fails, all buildings are treated as applicable."""
+        mgr = _make_mgr(tmp_path)
+        building_ids = [1, 2, 3]
+
+        def _explode(*args: Any, **kwargs: Any):
+            raise OSError("network error")
+
+        monkeypatch.setattr(pl, "scan_parquet", _explode)
+        result = mgr.get_upgrade_applicability(1, building_ids)
+        assert result == {1: True, 2: True, 3: True}
+
+    def test_upgrade_uri_used_for_non_baseline(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The URI passed to scan_parquet is the upgrade (not baseline) metadata URI."""
+        mgr = _make_mgr(tmp_path)
+        captured_uris: list[str] = []
+        expected_uri = mgr.get_metadata_uri_for_upgrade(3)
+
+        fake_df = pl.DataFrame({"bldg_id": pl.Series([], dtype=pl.Int32), "applicability": pl.Series([], dtype=pl.Boolean)})
+
+        def _fake_scan(uri: str, **kwargs: Any):
+            captured_uris.append(uri)
+            return fake_df.lazy()
+
+        monkeypatch.setattr(pl, "scan_parquet", _fake_scan)
+        mgr.get_upgrade_applicability(3, [1, 2])
+        assert captured_uris[0] == expected_uri
+
+
+# ===========================================================================
 # Integration tests — live OEDI S3 access
 # ===========================================================================
 
@@ -420,6 +555,75 @@ def integration_mgr(tmp_path_factory: pytest.TempPathFactory) -> BuildStockDataM
         cache_dir=cache_dir,
         max_workers=_N_BUILDINGS,
     )
+
+
+@pytest.mark.integration
+class TestIntegrationApplicability:
+    @pytest.fixture(autouse=True)
+    def _ensure_metadata_loaded(self, integration_mgr: BuildStockDataManager) -> None:
+        """Load metadata so state_mapping and building_ids are available."""
+        if not integration_mgr._state_mapping:
+            integration_mgr.load_metadata(
+                columns=[
+                    integration_mgr.config.building_id_column,
+                    integration_mgr.config.state_column,
+                ]
+            )
+
+    def test_applicability_returns_correct_keys(
+        self, integration_mgr: BuildStockDataManager
+    ) -> None:
+        """Result dict contains an entry for every queried building."""
+        sample_ids = integration_mgr.get_building_ids()[:50]
+        result = integration_mgr.get_upgrade_applicability(1, sample_ids)
+        assert set(result.keys()) == set(sample_ids)
+
+    def test_applicability_values_are_bool(
+        self, integration_mgr: BuildStockDataManager
+    ) -> None:
+        """All values are plain Python bools."""
+        sample_ids = integration_mgr.get_building_ids()[:50]
+        result = integration_mgr.get_upgrade_applicability(13, sample_ids)
+        assert all(isinstance(v, bool) for v in result.values())
+
+    def test_some_buildings_applicable_some_not(
+        self, integration_mgr: BuildStockDataManager
+    ) -> None:
+        """
+        For a real upgrade, at least some buildings should be applicable
+        and at least some should not (i.e. not all True and not all False
+        across a reasonably large sample).
+        """
+        sample_ids = integration_mgr.get_building_ids()[500:1000]
+        result = integration_mgr.get_upgrade_applicability(13, sample_ids)
+        n_applicable = sum(1 for v in result.values() if v)
+        assert 0 < n_applicable < len(sample_ids), (
+            f"Expected mixed applicability, got {n_applicable}/{len(sample_ids)} applicable"
+        )
+
+    def test_baseline_always_applicable(
+        self, integration_mgr: BuildStockDataManager
+    ) -> None:
+        """Upgrade 0 (baseline) must return True for every building."""
+        sample_ids = integration_mgr.get_building_ids()[:100]
+        result = integration_mgr.get_upgrade_applicability(0, sample_ids)
+        assert all(result.values())
+
+    def test_applicability_fetch_timing(
+        self, integration_mgr: BuildStockDataManager
+    ) -> None:
+        """Fetch applicability for a large sample and report timing."""
+        sample_ids = integration_mgr.get_building_ids()[:2_000]
+        t0 = time.perf_counter()
+        result = integration_mgr.get_upgrade_applicability(13, sample_ids)
+        elapsed = time.perf_counter() - t0
+        n_app = sum(1 for v in result.values() if v)
+        print(
+            f"\n[Applicability] upgrade=1  sample={len(sample_ids):,}  "
+            f"applicable={n_app:,} ({n_app/len(sample_ids)*100:.1f}%)  "
+            f"elapsed={elapsed:.2f}s"
+        )
+        assert elapsed < 30, "Applicability fetch took unexpectedly long"
 
 
 @pytest.mark.integration

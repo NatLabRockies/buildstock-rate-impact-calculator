@@ -15,9 +15,12 @@ class AppState:
     """Holds all user selections and transient state for the app session."""
 
     # ── Dataset selection ────────────────────────────────────────────────────
-    dataset_type: str = "resstock"
-    release: str = "2024_release_2"
-    selected_upgrades: list[int] = field(default_factory=lambda: [0])
+    # dataset_type: str = "resstock"
+    dataset_type: None | str = None  # e.g. "resstock" or "comstock"; None if not yet selected
+    # release: str = "2024_release_2"
+    release: None | str = None  # e.g. "2024_release_2"; None if not yet selected
+    # selected_upgrades: list[int] = field(default_factory=lambda: [0])
+    selected_upgrades: None | list[int] = None  # List of selected upgrade IDs; None if not yet selected
 
     # ── Building filters ─────────────────────────────────────────────────────
     # Maps column name → list of selected values
@@ -82,13 +85,13 @@ class AppState:
         # New map-based selections take priority
         if self.selected_county_ids or self.selected_puma_ids:
             conditions = []
-            if self.selected_county_ids and "in.nhgis_county_gisjoin" in metadata_df.columns:
+            if self.selected_county_ids and "in.county" in metadata_df.columns:
                 conditions.append(
-                    pl.col("in.nhgis_county_gisjoin").is_in(self.selected_county_ids)
+                    pl.col("in.county").is_in(self.selected_county_ids)
                 )
-            if self.selected_puma_ids and "in.nhgis_puma_gisjoin" in metadata_df.columns:
+            if self.selected_puma_ids and "in.puma" in metadata_df.columns:
                 conditions.append(
-                    pl.col("in.nhgis_puma_gisjoin").is_in(self.selected_puma_ids)
+                    pl.col("in.puma").is_in(self.selected_puma_ids)
                 )
             if conditions:
                 combined = conditions[0]
@@ -103,13 +106,13 @@ class AppState:
         if self.selected_geo_ids:
             if self.geo_level == "state" and "in.state" in metadata_df.columns:
                 return metadata_df.filter(pl.col("in.state").is_in(self.selected_geo_ids))
-            elif self.geo_level == "county" and "in.nhgis_county_gisjoin" in metadata_df.columns:
+            elif self.geo_level == "county" and "in.county" in metadata_df.columns:
                 return metadata_df.filter(
-                    pl.col("in.nhgis_county_gisjoin").is_in(self.selected_geo_ids)
+                    pl.col("in.county").is_in(self.selected_geo_ids)
                 )
-            elif self.geo_level == "puma" and "in.nhgis_puma_gisjoin" in metadata_df.columns:
+            elif self.geo_level == "puma" and "in.puma" in metadata_df.columns:
                 return metadata_df.filter(
-                    pl.col("in.nhgis_puma_gisjoin").is_in(self.selected_geo_ids)
+                    pl.col("in.puma").is_in(self.selected_geo_ids)
                 )
 
         return metadata_df

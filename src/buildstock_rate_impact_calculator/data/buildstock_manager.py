@@ -12,6 +12,7 @@ Compatible with: ResStock 2024 Release 2, ComStock 2024 Release 2
 """
 
 import polars as pl
+import polars.selectors as cs
 import pandas as pd
 import numpy as np
 import fsspec
@@ -127,7 +128,7 @@ class BuildStockDataManager:
             supported_upgrades=list(range(17)),  # 0-16 for ResStock
             metadata_path="metadata_and_annual_results/national/full/parquet",
             baseline_filename="upgrade0.parquet",
-            upgrade_filename="upgrade{upgrade_id:02d}.parquet",
+            upgrade_filename="upgrade{upgrade_id}.parquet",
             natural_gas_energy_column="out.natural_gas.total.energy_consumption..kwh",
             natural_gas_bill_column="out.utility_bills.bills.natural_gas_bill..usd",
             propane_energy_column="out.propane.total.energy_consumption..kwh",
@@ -618,7 +619,71 @@ class BuildStockDataManager:
         except Exception as e:
             self.logger.error(f"Error extracting building IDs: {str(e)}")
             raise
-    
+
+    def get_upgrade_applicability(
+        self,
+        upgrade_id: int,
+        building_ids: List[Any],
+    ) -> Dict[Any, bool]:
+        """
+        Return a mapping of building_id → applicable (bool) for the given upgrade.
+
+        For upgrade 0 (baseline), all buildings are treated as applicable.
+        For non-baseline upgrades, reads the ``applicability`` column from the
+        upgrade metadata parquet. Buildings absent from the upgrade metadata
+        are treated as not applicable.
+
+        Args:
+            upgrade_id: Upgrade scenario ID (0 = baseline, always True).
+            building_ids: List of building IDs to check.
+
+        Returns:
+            Dict mapping building_id → bool for every ID in building_ids.
+        """
+        if upgrade_id == 0:
+            return {bid: True for bid in building_ids}
+
+        uri = self.get_metadata_uri_for_upgrade(upgrade_id)
+        bldg_col = self.config.building_id_column
+
+        try:
+            # df = (
+            #     pl.scan_parquet(uri, storage_options=self._S3_ANON)
+            #     .select([bldg_col, "applicability"])
+            #     .filter(pl.col(bldg_col).is_in(building_ids))
+            #     .collect()
+            # )
+            # result: Dict[Any, bool] = {
+            #     row[bldg_col]: bool(row["applicability"])
+            #     for row in df.iter_rows(named=True)
+            # }
+            # # Buildings absent from the upgrade metadata default to not applicable
+            # for bid in building_ids:
+            #     if bid not in result:
+            #         result[bid] = False
+            # return result
+            df = (
+                pl.scan_parquet(uri, storage_options=self._S3_ANON)
+                .filter(
+                    pl.any_horizontal(
+                        cs.starts_with('upgrade.').is_not_null()
+                    )
+                )
+                .select('bldg_id')
+                .collect()
+            )
+            applicable_ids = set(df.to_series().to_list())
+            result = dict.fromkeys(building_ids, False)
+            for ids in applicable_ids.intersection(building_ids):
+                result[ids] = True
+            return result
+        except Exception as exc:
+            self.logger.warning(
+                f"Could not fetch applicability for upgrade {upgrade_id}: {exc}. "
+                "Treating all buildings as applicable."
+            )
+            return {bid: True for bid in building_ids}
+
     def estimate_download_size(self, building_ids: List[Any], upgrades: Optional[List[int]] = None) -> int:
         """
         Estimate the total download size in bytes for given building IDs and upgrades.

@@ -199,6 +199,10 @@ def render_rates_page(app_state: AppState) -> None:
     """Render the energy rate configuration and assignment UI."""
     st.header("Energy Rate Configuration")
 
+    if not app_state.dataset_type or not app_state.release:
+        st.warning("Please select a dataset on the Dataset tab first.")
+        return
+
     # ── Derive dataset base_uri for upgrade label lookups ─────────────────────
     _config_key = f"{app_state.dataset_type}_{app_state.release}"
     _base_uri = BuildStockDataManager.DATASET_CONFIGS[_config_key].base_uri
