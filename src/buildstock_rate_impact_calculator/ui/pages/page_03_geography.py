@@ -94,8 +94,22 @@ def _render_applicability_table(app_state: AppState) -> None:
     ):
         return
 
+    has_geo_selections = bool(
+        app_state.selected_states
+        or app_state.selected_county_ids
+        or app_state.selected_puma_ids
+        or app_state.selected_geo_ids
+    )
+
     sum_key = compute_summary_cache_key(app_state)
     summary = st.session_state.get(sum_key)
+
+    # Auto-compute the summary on first render when a project config has
+    # populated geo selections but no summary has been cached yet.
+    if summary is None and has_geo_selections:
+        _apply_geographic_selection(app_state)
+        summary = st.session_state.get(sum_key)
+
     if not summary:
         return
 

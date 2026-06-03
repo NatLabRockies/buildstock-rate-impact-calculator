@@ -203,7 +203,116 @@ def render_results_page(app_state: AppState) -> None:
             st.altair_chart(diff_chart, width='stretch')
         except Exception as exc:
             st.error(f"Bill difference error: {exc}")
+    # ── Upgrade vs Baseline Comparison ────────────────────────────────────────
+    if "applicable" in df.columns and len(upgrades) > 1 and 0 in upgrades:
+        st.divider()
+        st.subheader("Upgrade vs Baseline Comparison")
+        st.caption(
+            "Compares each upgrade against the baseline. "
+            "Unapplicable buildings use their baseline load profile with the upgrade rate."
+        )
+        import altair as alt
+        baseline_bills = (
+            df.filter(pl.col("upgrade") == 0)
+            .select(["bldg_id", pl.col("annual_bill").alias("baseline_bill")])
+        )
+        non_baseline_upgrades = [u for u in upgrades if u != 0]
+        for _uid in non_baseline_upgrades:
+            _label = _scenario_display(_base_uri, _uid)
+            with st.expander(_label, expanded=(_uid == non_baseline_upgrades[0])):
+                _upg_df = df.filter(pl.col("upgrade") == _uid)
+                _show = st.radio(
+                    "Show buildings:",
+                    ["All filtered buildings", "Applicable buildings only"],
+                    key=f"comp_mode_{_uid}",
+                    horizontal=True,
+                )
+                if _show == "Applicable buildings only":
+                    _upg_df = _upg_df.filter(pl.col("applicable"))
+                _merged = _upg_df.join(baseline_bills, on="bldg_id", how="left").with_columns(
+                    (pl.col("baseline_bill") - pl.col("annual_bill")).alias("annual_savings")
+                )
+                _n_total = len(_upg_df)
+                _n_app = (
+                    int(_upg_df["applicable"].sum())
+                    if "applicable" in _upg_df.columns
+                    else _n_total
+                )
+                _mean_sav = _merged["annual_savings"].mean()
+                _m1, _m2, _m3 = st.columns(3)
+                with _m1:
+                    st.metric("Buildings", f"{_n_total:,}")
+                with _m2:
+                    st.metric("Applicable", f"{_n_app:,}")
+                with _m3:
+                    if _mean_sav is not None:
+                        _sign = "+" if _mean_sav > 0 else ""
+                        st.metric("Mean Savings", f"{_sign}${_mean_sav:,.0f}")
 
+                # Summary statistics table
+                try:
+                    _stats = _merged.select([
+                        pl.col("annual_savings").mean().alias("Mean ($)"),
+                        pl.col("annual_savings").median().alias("Median ($)"),
+                        pl.col("annual_savings").std().alias("Std Dev ($)"),
+                        pl.col("annual_savings").min().alias("Min ($)"),
+                        pl.col("annual_savings").max().alias("Max ($)"),
+                    ])
+                    st.dataframe(
+                        _stats.to_pandas().style.format("${:,.2f}"),
+                        hide_index=True,
+                        width='stretch',
+                    )
+                except Exception as exc:
+                    st.warning(f"Stats error: {exc}")
+
+                # Box/whisker savings chart, split by applicability
+                try:
+                    _plot = _merged.filter(pl.col("annual_savings").is_not_null())
+                    if "applicable" in _plot.columns:
+                        _plot = _plot.with_columns(
+                            pl.when(pl.col("applicable"))
+                            .then(pl.lit("Applicable"))
+                            .otherwise(pl.lit("Not Applicable"))
+                            .alias("Group")
+                        )
+                        _color = alt.Color(
+                            "Group:N",
+                            scale=alt.Scale(
+                                domain=["Applicable", "Not Applicable"],
+                                range=["#2196F3", "#FF9800"],
+                            ),
+                        )
+                        _x_enc = alt.X("Group:N", title=None)
+                    else:
+                        _plot = _plot.with_columns(pl.lit("All").alias("Group"))
+                        _color = alt.value("#2196F3")
+                        _x_enc = alt.X("Group:N", title=None)
+                    _chart = (
+                        alt.Chart(_plot.to_pandas())
+                        .mark_boxplot(extent="min-max", size=60)
+                        .encode(
+                            x=_x_enc,
+                            y=alt.Y("annual_savings:Q", title="Annual Savings ($)"),
+                            color=_color,
+                            tooltip=[
+                                alt.Tooltip(
+                                    "annual_savings:Q",
+                                    title="Savings ($)",
+                                    format="$.0f",
+                                )
+                            ],
+                        )
+                        .properties(
+                            title="Annual Bill Savings vs Baseline",
+                            width=350,
+                            height=320,
+                        )
+                        .interactive()
+                    )
+                    st.altair_chart(_chart, width='stretch')
+                except Exception as exc:
+                    st.warning(f"Chart error: {exc}")
     st.divider()
 
     # ── Export ────────────────────────────────────────────────────────────────

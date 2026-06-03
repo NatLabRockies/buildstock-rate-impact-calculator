@@ -27,6 +27,12 @@ def _fmt_ts(ts: object) -> str:
         return "—"
 
 
+def _get_urdb_client(api_key: str):
+    """Return a URDBClient for *api_key*."""
+    from buildstock_rate_impact_calculator.rates.urdb_client import URDBClient
+    return URDBClient(api_key=api_key)
+
+
 def render_urdb_search(api_key: str, dataset_type: str = "resstock") -> Optional[dict]:
     """
     Render a URDB rate search UI.
@@ -67,7 +73,7 @@ def render_urdb_search(api_key: str, dataset_type: str = "resstock") -> Optional
             st.error("Enter your OpenEI API key in the sidebar before searching.")
             return None
         try:
-            client = URDBClient(api_key=api_key)
+            client = _get_urdb_client(api_key)
             with st.spinner("Loading utility list…"):
                 companies = client.get_utility_companies()
             st.session_state["urdb_utility_companies"] = companies
@@ -149,7 +155,7 @@ def render_urdb_search(api_key: str, dataset_type: str = "resstock") -> Optional
         st.session_state.pop("urdb_selected_idx", None)
         try:
             import datetime as _dt
-            client = URDBClient(api_key=api_key)
+            client = _get_urdb_client(api_key)
 
             # Convert effective_as_of date to Unix timestamp (start of day UTC)
             _eff_dt = _dt.datetime(
@@ -168,7 +174,11 @@ def render_urdb_search(api_key: str, dataset_type: str = "resstock") -> Optional
                     effective_as_of=effective_ts,
                     limit=50,
                 )
-            st.session_state["urdb_search_results"] = results
+            # Strip to display-only fields — full rate data is fetched on explicit load
+            _DISPLAY_KEYS = {"name", "utility", "sector", "approved", "startdate", "enddate", "label", "is_default"}
+            st.session_state["urdb_search_results"] = [
+                {k: v for k, v in r.items() if k in _DISPLAY_KEYS} for r in results
+            ]
             st.rerun()
         except Exception as exc:
             st.error(f"URDB search failed: {exc}")
@@ -222,7 +232,7 @@ def render_urdb_search(api_key: str, dataset_type: str = "resstock") -> Optional
     if st.button("Load selected rate", key="urdb_load_btn"):
         chosen_label = label_options[chosen_idx]
         try:
-            client = URDBClient(api_key=api_key)
+            client = _get_urdb_client(api_key)
             with st.spinner("Fetching full rate data…"):
                 full_rate = client.get_rate_by_label(chosen_label)
             if full_rate:

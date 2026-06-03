@@ -25,6 +25,7 @@ _META_COLUMNS = frozenset({
     "annual_energy_kwh", "average_rate_ct_kwh", "monthly_bills",
     "error", "baseline_bill", "bill_diff",
     "natural_gas_rate_name", "propane_rate_name", "fuel_oil_rate_name",
+    "applicable",
 } | set(_BILL_COLUMNS))
 
 
