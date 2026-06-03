@@ -20,6 +20,13 @@ _DATASET_DISPLAY_NAMES = {
 }
 
 
+def _clear_loaded_dataset_data() -> None:
+    """Clear cached dataset managers/metadata and related summary caches."""
+    for key in list(st.session_state.keys()):
+        if key.startswith("mgr_") or key.startswith("metadata_") or key.startswith("applicability_summary_"):
+            st.session_state.pop(key, None)
+
+
 def render_dataset_page(app_state: AppState) -> None:
     """Render the dataset and upgrade selection UI."""
     st.header("Dataset & Upgrade Selection")
@@ -28,30 +35,47 @@ def render_dataset_page(app_state: AppState) -> None:
     dataset_options = list(BuildStockDataManager.DATASET_CONFIGS.keys())
     display_options = [_DATASET_DISPLAY_NAMES.get(k, k) for k in dataset_options]
 
-    # Determine current selection index
+    # Determine current selection index.
+    # Keep this unselected on first app start so downstream tabs do not
+    # initialize managers or load metadata before explicit user selection.
     current_key = f"{app_state.dataset_type}_{app_state.release}"
-    try:
-        current_idx = dataset_options.index(current_key)
-    except ValueError:
-        current_idx = 0
+    has_existing_dataset = (
+        app_state.dataset_type is not None
+        and app_state.release is not None
+        and current_key in dataset_options
+    )
+    current_idx = dataset_options.index(current_key) if has_existing_dataset else None
 
     selected_display = st.selectbox(
         "Dataset Version",
         options=display_options,
         index=current_idx,
+        placeholder="Choose a dataset version",
         help="Select the ResStock or ComStock dataset version to use.",
     )
+
+    if selected_display is None:
+        st.info("Select a Dataset Version to continue.")
+        return
+
     selected_key = dataset_options[display_options.index(selected_display)]
     parts = selected_key.split("_", 1)
     new_dataset_type = parts[0]
     new_release = parts[1]
 
-    # Update state if changed
-    if new_dataset_type != app_state.dataset_type or new_release != app_state.release:
-        app_state.dataset_type = new_dataset_type
-        app_state.release = new_release
-        # Reset upgrades when dataset changes
-        app_state.selected_upgrades = [0]
+    applied_key = (
+        f"{app_state.dataset_type}_{app_state.release}"
+        if app_state.dataset_type and app_state.release
+        else None
+    )
+
+    # If user switches dataset version after applying one, discard scenarios
+    # and any loaded manager/metadata cache so downstream pages do not reuse
+    # stale data.
+    if applied_key and selected_key != applied_key:
+        app_state.selected_upgrades = None
+        app_state.metadata_loaded = False
+        _clear_loaded_dataset_data()
 
     # ── Upgrade selection ─────────────────────────────────────────────────────
     st.subheader("Scenarios")
@@ -60,8 +84,8 @@ def render_dataset_page(app_state: AppState) -> None:
 
     _labels = fetch_upgrade_labels(config.base_uri)
 
-    # Build label list: "0 – Baseline", "1 – ENERGY STAR heat pump…", etc.
-    upgrade_labels = [f"{u} – {_labels.get(u, f'Upgrade {u}')}" for u in upgrade_ids]
+    # Build label list: "0 - Baseline", "1 - ENERGY STAR heat pump…", etc.
+    upgrade_labels = [f"{u} - {_labels.get(u, f'Upgrade {u}')}" for u in upgrade_ids]
 
     # Always include baseline (0); user selects additional upgrades
     st.caption(
@@ -69,10 +93,10 @@ def render_dataset_page(app_state: AppState) -> None:
         "Select one or more upgrade scenarios to compare against baseline."
     )
 
-    # Pre-select currently stored upgrades
+    # Pre-select currently stored upgrades only for the currently applied dataset.
     current_selected_labels = [
-        f"{u} – {_labels.get(u, f'Upgrade {u}')}"
-        for u in app_state.selected_upgrades
+        f"{u} - {_labels.get(u, f'Upgrade {u}')}"
+        for u in ((app_state.selected_upgrades or []) if applied_key == selected_key else [])
         if u in upgrade_ids
     ]
 
@@ -80,25 +104,41 @@ def render_dataset_page(app_state: AppState) -> None:
         "Upgrade Scenarios",
         options=upgrade_labels,
         default=current_selected_labels,
+        key=f"upgrade_scenarios_{selected_key}",
         help="Select upgrade(s) to compare. Baseline (0) is always included.",
     )
 
     # Parse IDs back from labels
-    selected_ids = [int(lbl.split(" – ")[0]) for lbl in selected_labels]
-    # Always ensure baseline is included
-    if 0 not in selected_ids:
+    selected_ids = [int(lbl.split(" - ")[0]) for lbl in selected_labels]
+    if selected_ids and 0 not in selected_ids:
         selected_ids = [0] + selected_ids
 
-    app_state.selected_upgrades = selected_ids
+    # ── Auto-apply when both fields are set ──────────────────────────────────
+    if selected_ids:
+        app_state.dataset_type = new_dataset_type
+        app_state.release = new_release
+        app_state.selected_upgrades = selected_ids
+    elif applied_key == selected_key:
+        # User cleared upgrade selection for the currently applied dataset.
+        app_state.selected_upgrades = None
 
     # ── Summary ───────────────────────────────────────────────────────────────
     st.divider()
     col1, col2 = st.columns(2)
     with col1:
-        st.metric("Dataset", _DATASET_DISPLAY_NAMES.get(selected_key, selected_key))
+        current_dataset = (
+            _DATASET_DISPLAY_NAMES.get(f"{app_state.dataset_type}_{app_state.release}", "Not Applied")
+            if app_state.dataset_type and app_state.release
+            else "Not Applied"
+        )
+        st.metric("Current Dataset", current_dataset)
     with col2:
-        st.metric("Scenarios Selected", len(selected_ids))
+        st.metric("Current Scenarios", len(app_state.selected_upgrades or []))
 
-    st.success(
-        f"Selected: {', '.join(str(u) + ' – ' + _labels.get(u, f'Upgrade {u}') for u in selected_ids)}"
-    )
+    if selected_ids:
+        st.success(
+            f"Selected: {', '.join(str(u) + ' - ' + _labels.get(u, f'Upgrade {u}') for u in selected_ids)}"
+        )
+        st.caption("Selections auto-apply when dataset and one or more scenarios are set.")
+    else:
+        st.info("Select one or more Upgrade Scenarios to apply this dataset.")
