@@ -35,11 +35,14 @@ class AppState:
     selected_puma_ids: list[str] = field(default_factory=list)
 
     # ── Rate configuration ───────────────────────────────────────────────────
-    # Maps scenario key (e.g. "baseline", "upgrade_1") → rate config dict
-    rate_assignments: dict[str, dict] = field(default_factory=dict)
-    # Maps scenario key → {fuel_type → fuel rate dict (or None for dataset default)}
+    # Rate libraries — full rate dicts indexed by name (serialised to config)
+    rate_library: dict[str, dict] = field(default_factory=dict)
+    fuel_rate_library: dict[str, dict] = field(default_factory=dict)
+    # Maps scenario key (e.g. "baseline", "upgrade_1") → rate name (key in rate_library)
+    rate_assignments: dict[str, str] = field(default_factory=dict)
+    # Maps scenario key → {fuel_type → rate name (key in fuel_rate_library) or None}
     # fuel_type is one of "natural_gas", "propane", "fuel_oil"
-    fuel_rate_assignments: dict[str, dict[str, dict]] = field(default_factory=dict)
+    fuel_rate_assignments: dict[str, dict[str, str | None]] = field(default_factory=dict)
 
     # ── API / credentials ────────────────────────────────────────────────────
     urdb_api_key: str = ""
@@ -68,6 +71,8 @@ class AppState:
         "selected_states",
         "selected_county_ids",
         "selected_puma_ids",
+        "rate_library",
+        "fuel_rate_library",
         "rate_assignments",
         "fuel_rate_assignments",
         "urdb_api_key",
@@ -135,6 +140,22 @@ class AppState:
             value = data[key]
             if key == "output_dir":
                 value = Path(value)
+            # Migrate old-format rate_assignments (full dicts → name strings)
+            elif key == "rate_assignments" and isinstance(value, dict):
+                value = {
+                    sk: (rv.get("name") if isinstance(rv, dict) else rv)
+                    for sk, rv in value.items()
+                    if rv is not None
+                }
+            elif key == "fuel_rate_assignments" and isinstance(value, dict):
+                value = {
+                    sk: {
+                        ft: (fv.get("name") if isinstance(fv, dict) else fv)
+                        for ft, fv in ft_map.items()
+                    }
+                    for sk, ft_map in value.items()
+                    if isinstance(ft_map, dict)
+                }
             setattr(self, key, value)
 
     def save_config(self, path: Path | str) -> None:

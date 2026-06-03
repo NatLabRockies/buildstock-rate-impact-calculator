@@ -31,10 +31,11 @@ def _format_bytes(n: int) -> str:
     return f"{n:.1f} PB"
 
 
-def _urdb_key_required(rate_assignments: dict) -> bool:
-    for rate_config in rate_assignments.values():
-        if not isinstance(rate_config, dict):
+def _urdb_key_required(rate_assignments: dict, rate_library: dict) -> bool:
+    for rate_name in rate_assignments.values():
+        if not rate_name:
             continue
+        rate_config = rate_library.get(rate_name, {})
         if "label" in rate_config and "energyratestructure" not in rate_config:
             return True
     return False
@@ -150,6 +151,8 @@ def _run_pipeline(
     app_state: AppState,
     tracker: ProgressTracker,
     result_store: dict,
+    resolved_rate_assignments: dict,
+    resolved_fuel_rate_assignments: dict,
 ) -> None:
     """
     Background thread: download timeseries then calculate bills.
@@ -286,7 +289,7 @@ def _run_pipeline(
 
         for upgrade_id in app_state.selected_upgrades:
             scenario_key = _scenario_key(upgrade_id)
-            rate_config = app_state.rate_assignments.get(scenario_key)
+            rate_config = resolved_rate_assignments.get(scenario_key)
             if rate_config is None:
                 tracker.update(0, message=f"No electricity rate assigned for {scenario_key}, skipping.")
                 continue
@@ -340,12 +343,11 @@ def _run_pipeline(
         combined = pl.concat(all_results)
 
         # ── calculate fuel bills ──────────────────────────────────────────────
-        fuel_rate_assignments = getattr(app_state, "fuel_rate_assignments", {})
         fuel_frames: list[pl.DataFrame] = []
 
         for upgrade_id in app_state.selected_upgrades:
             scenario_key = _scenario_key(upgrade_id)
-            fuel_rates_for_scenario = fuel_rate_assignments.get(scenario_key, {})
+            fuel_rates_for_scenario = resolved_fuel_rate_assignments.get(scenario_key, {})
 
             fuel_df = _calculate_fuel_bills(
                 mgr=mgr,
@@ -496,7 +498,7 @@ def render_run_page(app_state: AppState) -> None:
     is_done = tracker is not None and tracker.is_done()
 
     # ── API key pre-flight check ──────────────────────────────────────────────
-    needs_urdb = _urdb_key_required(app_state.rate_assignments)
+    needs_urdb = _urdb_key_required(app_state.rate_assignments, app_state.rate_library)
     api_key_available = bool(
         app_state.urdb_api_key or os.getenv("OPENEI_API_KEY")
     )
@@ -513,9 +515,24 @@ def render_run_page(app_state: AppState) -> None:
         if st.button("▶ Start Download & Calculate", type="primary", disabled=start_blocked):
             new_tracker = ProgressTracker(total=1)
             new_results: dict = {}
+            # Resolve rate names → full dicts before handing off to background thread
+            _rate_lib = app_state.rate_library
+            _fuel_lib = app_state.fuel_rate_library
+            _resolved_rates = {
+                sk: _rate_lib[name]
+                for sk, name in app_state.rate_assignments.items()
+                if name and name in _rate_lib
+            }
+            _resolved_fuel = {
+                sk: {
+                    ft: _fuel_lib.get(name) if name else None
+                    for ft, name in ft_map.items()
+                }
+                for sk, ft_map in app_state.fuel_rate_assignments.items()
+            }
             new_thread = threading.Thread(
                 target=_run_pipeline,
-                args=(app_state, new_tracker, new_results),
+                args=(app_state, new_tracker, new_results, _resolved_rates, _resolved_fuel),
                 daemon=True,
             )
             st.session_state["run_tracker"] = new_tracker

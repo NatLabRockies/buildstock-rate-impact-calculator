@@ -208,12 +208,8 @@ def render_rates_page(app_state: AppState) -> None:
     _base_uri = BuildStockDataManager.DATASET_CONFIGS[_config_key].base_uri
 
     # ── Rate libraries (session-level dicts) ──────────────────────────────────
-    if "rate_library" not in st.session_state:
-        st.session_state["rate_library"] = {}
-    if "fuel_rate_library" not in st.session_state:
-        st.session_state["fuel_rate_library"] = {}
-    rate_library: dict[str, dict] = st.session_state["rate_library"]
-    fuel_rate_library: dict[str, dict] = st.session_state["fuel_rate_library"]
+    rate_library: dict[str, dict] = app_state.rate_library
+    fuel_rate_library: dict[str, dict] = app_state.fuel_rate_library
 
     # ── Rate input tabs ───────────────────────────────────────────────────────
     urdb_tab, tou_tab, flat_tab, fuel_tab = st.tabs([
@@ -225,27 +221,23 @@ def render_rates_page(app_state: AppState) -> None:
         if new_rate:
             key = new_rate.get("name", f"URDB Rate {len(rate_library) + 1}")
             rate_library[key] = new_rate
-            st.session_state["rate_library"] = rate_library
 
     with tou_tab:
         new_rate = render_tou_builder()
         if new_rate:
             key = new_rate.get("name", f"Custom TOU {len(rate_library) + 1}")
             rate_library[key] = new_rate
-            st.session_state["rate_library"] = rate_library
 
     with flat_tab:
         new_rate = render_flat_rate_form()
         if new_rate:
             key = new_rate.get("name", f"Flat Rate {len(rate_library) + 1}")
             rate_library[key] = new_rate
-            st.session_state["rate_library"] = rate_library
 
     with fuel_tab:
         new_fuel_rate = _render_fuel_rate_form(fuel_rate_library)
         if new_fuel_rate:
             fuel_rate_library[new_fuel_rate["name"]] = new_fuel_rate
-            st.session_state["fuel_rate_library"] = fuel_rate_library
             st.success(f"Added fuel rate: {new_fuel_rate['name']}")
             st.rerun()
 
@@ -274,10 +266,9 @@ def render_rates_page(app_state: AppState) -> None:
             with col2:
                 if st.button("🗑 Remove", key=f"remove_rate_{rate_name}"):
                     del rate_library[rate_name]
-                    st.session_state["rate_library"] = rate_library
                     # Clear any assignments pointing to this rate
                     for sk in list(app_state.rate_assignments.keys()):
-                        if app_state.rate_assignments[sk].get("name") == rate_name:
+                        if app_state.rate_assignments[sk] == rate_name:
                             del app_state.rate_assignments[sk]
                     st.rerun()
 
@@ -309,10 +300,9 @@ def render_rates_page(app_state: AppState) -> None:
                 with col2:
                     if st.button("🗑 Remove", key=f"remove_fuel_rate_{rate_name}"):
                         del fuel_rate_library[rate_name]
-                        st.session_state["fuel_rate_library"] = fuel_rate_library
                         # Clear any assignments pointing to this rate
                         for sk in list(app_state.fuel_rate_assignments.keys()):
-                            if app_state.fuel_rate_assignments[sk].get(ft, {}).get("name") == rate_name:
+                            if app_state.fuel_rate_assignments[sk].get(ft) == rate_name:
                                 app_state.fuel_rate_assignments[sk][ft] = None
                         st.rerun()
 
@@ -335,8 +325,7 @@ def render_rates_page(app_state: AppState) -> None:
         label = get_upgrade_label(_base_uri, upgrade_id)
         scenario_display = f"Upgrade {upgrade_id}: {label}" if upgrade_id > 0 else f"Baseline: {label}"
 
-        current_assignment = app_state.rate_assignments.get(scenario_key, {})
-        current_name = current_assignment.get("name") if current_assignment else None
+        current_name = app_state.rate_assignments.get(scenario_key)
 
         try:
             current_idx = rate_names.index(current_name) + 1 if current_name in rate_names else 0
@@ -354,7 +343,7 @@ def render_rates_page(app_state: AppState) -> None:
             if scenario_key in app_state.rate_assignments:
                 del app_state.rate_assignments[scenario_key]
         else:
-            app_state.rate_assignments[scenario_key] = rate_library[chosen]
+            app_state.rate_assignments[scenario_key] = chosen
 
     # Fuel types — only show assignment if rates exist for that type
     for ft in FUEL_TYPES:
@@ -377,8 +366,7 @@ def render_rates_page(app_state: AppState) -> None:
             if scenario_key not in app_state.fuel_rate_assignments:
                 app_state.fuel_rate_assignments[scenario_key] = {}
 
-            current_fuel = app_state.fuel_rate_assignments[scenario_key].get(ft)
-            current_fuel_name = current_fuel.get("name") if isinstance(current_fuel, dict) else None
+            current_fuel_name = app_state.fuel_rate_assignments[scenario_key].get(ft)
 
             try:
                 current_idx = ft_rate_names.index(current_fuel_name) + 1 if current_fuel_name in ft_rate_names else 0
@@ -395,7 +383,7 @@ def render_rates_page(app_state: AppState) -> None:
             if chosen_fuel == "— Dataset Default —":
                 app_state.fuel_rate_assignments[scenario_key][ft] = None
             else:
-                app_state.fuel_rate_assignments[scenario_key][ft] = fuel_rate_library[chosen_fuel]
+                app_state.fuel_rate_assignments[scenario_key][ft] = chosen_fuel
 
     # ── Assignment summary ────────────────────────────────────────────────────
     assigned_count = len(app_state.rate_assignments)
