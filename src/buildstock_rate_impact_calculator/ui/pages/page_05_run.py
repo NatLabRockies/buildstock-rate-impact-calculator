@@ -9,7 +9,6 @@ from __future__ import annotations
 import os
 import threading
 import time
-import json
 from pathlib import Path
 
 import streamlit as st
@@ -18,6 +17,10 @@ import polars as pl
 from buildstock_rate_impact_calculator.ui.state import AppState
 from buildstock_rate_impact_calculator.ui.components.progress_tracker import ProgressTracker
 from buildstock_rate_impact_calculator.data.upgrade_labels import get_upgrade_label
+from buildstock_rate_impact_calculator.ui.applicability import (
+    compute_summary_cache_key as _compute_summary_cache_key,
+    load_applicability_summary as _load_applicability_summary,
+)
 
 
 def _format_bytes(n: int) -> str:
@@ -39,6 +42,15 @@ def _urdb_key_required(rate_assignments: dict) -> bool:
 
 def _scenario_key(upgrade_id: int) -> str:
     return "baseline" if upgrade_id == 0 else f"upgrade_{upgrade_id}"
+
+
+def _scenario_display(base_uri: str, upgrade_id: int) -> str:
+    """Return a human-readable label for an upgrade scenario."""
+    try:
+        label = get_upgrade_label(base_uri, upgrade_id)
+    except Exception:
+        label = f"Upgrade {upgrade_id}"
+    return label if upgrade_id == 0 else f"Upgrade {upgrade_id}: {label}"
 
 
 def _calculate_fuel_bills(
@@ -172,39 +184,91 @@ def _run_pipeline(
             tracker.done(message="Cancelled before download.")
             return
 
+        # ── fetch upgrade applicability ───────────────────────────────────────
+        upgrade_applicable_ids: dict[int, list] = {0: list(building_ids)}
+        for _upg_id in app_state.selected_upgrades:
+            if _upg_id == 0:
+                continue
+            tracker.update(0, message=f"Fetching applicability for upgrade {_upg_id}…")
+            _applicability = mgr.get_upgrade_applicability(_upg_id, building_ids)
+            upgrade_applicable_ids[_upg_id] = [
+                bid for bid, v in _applicability.items() if v
+            ]
+            tracker.update(
+                0,
+                message=(
+                    f"Upgrade {_upg_id}: "
+                    f"{len(upgrade_applicable_ids[_upg_id]):,}/{len(building_ids):,} applicable."
+                ),
+            )
+
         # ── download timeseries (or reload from cache) ───────────────────────
-        total_downloads = len(building_ids) * len(app_state.selected_upgrades)
         ts_dir = output_dir / "timeseries"
 
-        cached_keys = {
-            f"{bldg}_{upg}"
-            for bldg in building_ids
-            for upg in app_state.selected_upgrades
-            if (ts_dir / f"{bldg}_{upg}.parquet").exists()
+        # Build (building_id, upgrade) pairs to download.
+        # Each upgrade only downloads timeseries for applicable buildings.
+        # Unapplicable buildings fall back to baseline files during bill calculation,
+        # so baseline files are included for those buildings even if upgrade 0
+        # is not among the selected scenarios.
+        all_pairs: set[tuple] = set()
+        for _upg in app_state.selected_upgrades:
+            _applicable_bids = set(upgrade_applicable_ids.get(_upg, building_ids))
+            if _upg == 0:
+                all_pairs |= {(bldg, 0) for bldg in building_ids}
+            else:
+                all_pairs |= {(bldg, _upg) for bldg in _applicable_bids}
+                # Unapplicable buildings need the baseline file for fall-back
+                _unapplicable_bids = set(building_ids) - _applicable_bids
+                all_pairs |= {(bldg, 0) for bldg in _unapplicable_bids}
+        cached_pairs = {
+            pair for pair in all_pairs
+            if (ts_dir / f"{pair[0]}_{pair[1]}.parquet").exists()
         }
-        all_cached = len(cached_keys) == total_downloads and total_downloads > 0
+        missing_pairs = all_pairs - cached_pairs
 
-        if all_cached:
-            tracker.update(0, message="All timeseries files already downloaded — loading from disk…")
-            ts_data = mgr.load_cached_timeseries(
-                building_ids=building_ids,
-                upgrades=app_state.selected_upgrades,
-                output_dir=ts_dir,
-            )
-            tracker.update(total_downloads, message=f"Loaded {len(ts_data)} cached files.")
-        else:
-            tracker._total = total_downloads
+        ts_data: dict[str, pl.DataFrame] = {}
+
+        # Load already-downloaded files from disk
+        if cached_pairs:
+            n_cached = len(cached_pairs)
+            tracker.update(0, message=f"Loading {n_cached} cached timeseries files from disk…")
+            cached_bldgs_by_upg: dict[int, list] = {}
+            for bldg, upg in cached_pairs:
+                cached_bldgs_by_upg.setdefault(upg, []).append(bldg)
+            for upg, bldgs in cached_bldgs_by_upg.items():
+                ts_data.update(
+                    mgr.load_cached_timeseries(
+                        building_ids=bldgs,
+                        upgrades=[upg],
+                        output_dir=ts_dir,
+                    )
+                )
+
+        # Download only the missing files
+        if missing_pairs:
+            n_missing = len(missing_pairs)
+            tracker._total = n_missing
+            missing_bldgs_by_upg: dict[int, list] = {}
+            for bldg, upg in missing_pairs:
+                missing_bldgs_by_upg.setdefault(upg, []).append(bldg)
 
             def dl_progress(done, total, msg=""):
                 tracker.update(completed=1, message=msg)
 
-            ts_data = mgr.download_timeseries_with_progress(
-                building_ids=building_ids,
-                upgrades=app_state.selected_upgrades,
-                output_dir=ts_dir,
-                progress_cb=dl_progress,
-                cancel_event=tracker.cancel_event,
-            )
+            for upg, bldgs in missing_bldgs_by_upg.items():
+                if tracker.is_cancelled():
+                    break
+                ts_data.update(
+                    mgr.download_timeseries_with_progress(
+                        building_ids=bldgs,
+                        upgrades=[upg],
+                        output_dir=ts_dir,
+                        progress_cb=dl_progress,
+                        cancel_event=tracker.cancel_event,
+                    )
+                )
+        elif cached_pairs:
+            tracker.update(len(cached_pairs), message=f"Loaded {len(cached_pairs)} cached files.")
 
         if tracker.is_cancelled():
             tracker.done(message="Download cancelled.")
@@ -230,10 +294,14 @@ def _run_pipeline(
             tracker.update(0, message=f"Calculating electricity bills for upgrade {upgrade_id}…")
             tracker._total += len(building_ids)
 
+            applicable_set = set(upgrade_applicable_ids.get(upgrade_id, building_ids))
             load_records = []
             for bldg_id in building_ids:
-                key = f"{bldg_id}_{upgrade_id}"
-                df = ts_data.get(key)
+                # Applicable buildings use their upgrade timeseries;
+                # unapplicable buildings fall back to baseline timeseries.
+                is_applicable = (upgrade_id == 0) or (bldg_id in applicable_set)
+                ts_key = f"{bldg_id}_{upgrade_id}" if is_applicable else f"{bldg_id}_0"
+                df = ts_data.get(ts_key)
                 if df is None:
                     continue
                 if load_column not in df.columns:
@@ -256,6 +324,10 @@ def _run_pipeline(
                     progress_cb=lambda done, total: tracker.update(
                         completed=1, message=f"Calculated {done}/{total}"
                     ),
+                )
+                # Tag each building with its applicability status for this upgrade
+                result_df = result_df.with_columns(
+                    pl.col("bldg_id").is_in(list(applicable_set)).alias("applicable")
                 )
                 all_results.append(result_df)
             except Exception as exc:
@@ -311,15 +383,92 @@ def render_run_page(app_state: AppState) -> None:
     """Render the Run page with configuration summary, progress, and cancel."""
     st.header("Run")
 
+    if not app_state.dataset_type or not app_state.release:
+        st.warning("Please select a dataset on the Dataset tab first.")
+        return
+
+    if not app_state.selected_upgrades:
+        st.warning("Please select one or more upgrade scenarios on the Dataset tab first.")
+        return
+
     # ── Configuration summary ─────────────────────────────────────────────────
     st.subheader("Configuration Summary")
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     with col1:
         st.metric("Dataset", f"{app_state.dataset_type} {app_state.release}")
     with col2:
         st.metric("Scenarios", len(app_state.selected_upgrades))
-    with col3:
-        st.metric("Est. Download", _format_bytes(app_state.estimated_download_bytes))
+
+    # Geo and filter detail expanders
+    col_geo, col_flt = st.columns(2)
+    with col_geo:
+        with st.expander("Geographic Selections", expanded=False):
+            if app_state.selected_states:
+                st.markdown(f"**States:** {', '.join(sorted(app_state.selected_states))}")
+            if app_state.selected_county_ids:
+                st.markdown(f"**Counties:** {len(app_state.selected_county_ids)} selected")
+            if app_state.selected_puma_ids:
+                st.markdown(f"**PUMAs:** {len(app_state.selected_puma_ids)} selected")
+            if not (
+                app_state.selected_states
+                or app_state.selected_county_ids
+                or app_state.selected_puma_ids
+                or app_state.selected_geo_ids
+            ):
+                st.caption("No geographic filter — all states included.")
+    with col_flt:
+        with st.expander("Building Filters", expanded=False):
+            if app_state.active_filters:
+                for _fcol, _fval in app_state.active_filters.items():
+                    _fdisp = (
+                        ", ".join(str(v) for v in _fval)
+                        if isinstance(_fval, list)
+                        else str(_fval)
+                    )
+                    st.markdown(f"**{_fcol}:** {_fdisp}")
+            else:
+                st.caption("No building attribute filters applied.")
+
+    # ── Upgrade applicability summary (auto-loaded, cached per config hash) ───
+    st.markdown("**Upgrade Applicability Summary**")
+    _sum_key = _compute_summary_cache_key(app_state)
+    _ref_col, _ = st.columns([1, 7])
+    with _ref_col:
+        if st.button(
+            "↺ Refresh",
+            key="btn_refresh_applicability",
+            help="Re-fetch applicability data from OEDI",
+        ):
+            st.session_state.pop(_sum_key, None)
+            st.rerun()
+    if _sum_key not in st.session_state:
+        with st.spinner("Loading upgrade applicability from OEDI…"):
+            st.session_state[_sum_key] = _load_applicability_summary(app_state)
+    _summary = st.session_state[_sum_key]
+    if "error" in _summary:
+        st.warning(f"Could not load applicability data: {_summary['error']}")
+    else:
+        _cfg_key = f"{app_state.dataset_type}_{app_state.release}"
+        from buildstock_rate_impact_calculator.data.buildstock_manager import BuildStockDataManager as _BMgr
+        _base_uri = _BMgr.DATASET_CONFIGS[_cfg_key].base_uri
+        _tbl_rows = []
+        for _row in _summary.get("rows", []):
+            _uid = _row["upgrade_id"]
+            _lbl = _scenario_display(_base_uri, _uid)
+            _pct = _row["n_applicable"] / _row["n_total"] * 100 if _row["n_total"] > 0 else 0.0
+            _tbl_rows.append({
+                "Scenario": _lbl,
+                "Applicable": f"{_row['n_applicable']:,} / {_row['n_total']:,} ({_pct:.0f}%)",
+                "Est. Download": _format_bytes(_row["est_bytes"]),
+            })
+        if _tbl_rows:
+            st.dataframe(
+                pl.DataFrame(_tbl_rows).to_pandas(),
+                hide_index=True,
+                width='stretch',
+            )
+            _total_est = sum(r["est_bytes"] for r in _summary.get("rows", []))
+            st.caption(f"Total estimated download: {_format_bytes(_total_est)}")
 
     assigned = len(app_state.rate_assignments)
     total_scenarios = len(app_state.selected_upgrades)
@@ -328,15 +477,6 @@ def render_run_page(app_state: AppState) -> None:
             f"Only {assigned}/{total_scenarios} scenarios have rates assigned. "
             "Go to the Rates tab to assign rates before running."
         )
-
-    has_geo = bool(
-        app_state.selected_states
-        or app_state.selected_county_ids
-        or app_state.selected_puma_ids
-        or app_state.selected_geo_ids
-    )
-    if not has_geo and not app_state.active_filters:
-        st.info("No geographic or building filters set — all buildings in dataset will be included.")
 
     st.divider()
 
