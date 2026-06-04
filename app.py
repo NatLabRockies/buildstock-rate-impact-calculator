@@ -11,6 +11,7 @@ from buildstock_rate_impact_calculator.ui.sidebar_helpers import (
     default_project_name,
     browse_folder,
 )
+from buildstock_rate_impact_calculator.ui.project_io import load_project as _load_project
 
 # Configure the single package-level logger for the entire app session
 setup_logging()
@@ -27,9 +28,19 @@ st.set_page_config(
 app_state = init_session_state()
 
 
-def load_project_placeholder(state):
-    """Stub — actual load logic coming in Phase 4."""
-    st.info(f"Load logic coming in Phase 4 for: {state.project_name}")
+def _do_load_project(project_dir: Path, state) -> None:
+    """Load project from directory and rerun."""
+    try:
+        missing = _load_project(project_dir, state, api_key=state.urdb_api_key)
+        if missing:
+            st.warning(f"Loaded project — {len(missing)} rate(s) could not be restored: {', '.join(missing)}")
+        else:
+            st.success(f"Project loaded: {project_dir.name}")
+        st.rerun()
+    except FileNotFoundError:
+        st.error(f"No config.json found in: {project_dir}")
+    except Exception as exc:
+        st.error(f"Failed to load project: {exc}")
 
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
@@ -94,8 +105,7 @@ with st.sidebar:
     )
     if st.button("Load", key="load_from_dropdown"):
         if selected_project:
-            app_state.project_name = selected_project
-            load_project_placeholder(app_state)
+            _do_load_project(app_state.output_dir / "projects" / selected_project, app_state)
 
     st.caption("— or load from path —")
     load_path_str = st.text_input(
@@ -105,8 +115,7 @@ with st.sidebar:
     )
     if st.button("Load", key="load_from_path"):
         if load_path_str:
-            app_state.project_name = Path(load_path_str).name
-            load_project_placeholder(app_state)
+            _do_load_project(Path(load_path_str), app_state)
 
     st.divider()
 

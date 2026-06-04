@@ -15,6 +15,7 @@ import streamlit as st
 import polars as pl
 
 from buildstock_rate_impact_calculator.ui.state import AppState
+from buildstock_rate_impact_calculator.ui.project_io import save_project as _save_project
 from buildstock_rate_impact_calculator.ui.components.progress_tracker import ProgressTracker
 from buildstock_rate_impact_calculator.data.upgrade_labels import get_upgrade_label
 from buildstock_rate_impact_calculator.ui.applicability import (
@@ -539,6 +540,8 @@ def render_run_page(app_state: AppState) -> None:
             st.session_state["run_tracker"] = new_tracker
             st.session_state["run_thread"] = new_thread
             st.session_state["run_results"] = new_results
+            if app_state.project_name:
+                _save_project(app_state)
             new_thread.start()
             st.rerun()
     else:

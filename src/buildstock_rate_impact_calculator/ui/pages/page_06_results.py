@@ -37,6 +37,10 @@ def render_results_page(app_state: AppState) -> None:
     result_store = st.session_state.get(results_key, {})
     df: pl.DataFrame | None = result_store.get("df")
 
+    # Also check for results loaded via load_project
+    if df is None:
+        df = st.session_state.get("results_df")
+
     if df is None or len(df) == 0:
         if not app_state.results_available:
             st.info("No results yet. Complete the Run step (tab 5) to generate bill calculations.")
@@ -53,6 +57,10 @@ def render_results_page(app_state: AppState) -> None:
             return_dtype=pl.Utf8,
         ).alias("scenario")
     )
+
+    # ── Navigate-to-results banner ────────────────────────────────────────────
+    if st.session_state.pop("_navigate_to_results", False):
+        st.info("📂 Results loaded from project — displaying below.")
 
     # ── Group-by selector ─────────────────────────────────────────────────────
     st.subheader("Grouping")

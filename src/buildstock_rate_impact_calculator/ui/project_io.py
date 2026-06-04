@@ -168,3 +168,58 @@ def _urdb_fetch(label: str, api_key: str) -> dict | None:
         return client.get_rate_by_label(label)
     except Exception:
         return None
+
+
+def load_project(
+    project_dir: Path,
+    app_state: "AppState",
+    api_key: str,
+    session_state: dict | None = None,
+) -> list[str]:
+    """Load a project from project_dir into app_state.
+
+    Steps:
+    1. Read config.json and call app_state.apply_config_dict(config)
+    2. Call load_project_rates to restore rate_library and fuel_rate_library
+    3. If results/bill_results.csv exists, read it as a Polars DataFrame
+       and store in session_state["results_df"]; set session_state["_navigate_to_results"] = True
+    4. Store missing rate names in session_state["_missing_rates"]
+
+    Returns the list of missing rate names.
+
+    ``session_state`` defaults to ``st.session_state`` when None (at runtime).
+    Tests pass a plain dict to avoid importing Streamlit.
+    """
+    import polars as pl
+
+    if session_state is None:
+        import streamlit as st
+        session_state = st.session_state  # type: ignore[assignment]
+
+    # 1. Load config
+    config_path = project_dir / "config.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    app_state.apply_config_dict(config)
+
+    # 2. Restore rate libraries
+    rate_library, fuel_rate_library, missing = load_project_rates(
+        project_dir=project_dir,
+        rate_assignments=app_state.rate_assignments,
+        fuel_rate_assignments=app_state.fuel_rate_assignments,
+        rate_label_map=app_state.rate_label_map,
+        api_key=api_key,
+    )
+    app_state.rate_library = rate_library
+    app_state.fuel_rate_library = fuel_rate_library
+
+    # 3. Results CSV
+    results_csv = project_dir / "results" / "bill_results.csv"
+    if results_csv.exists():
+        df = pl.read_csv(results_csv)
+        session_state["results_df"] = df
+        session_state["_navigate_to_results"] = True
+
+    # 4. Missing rates flag
+    session_state["_missing_rates"] = missing
+
+    return missing

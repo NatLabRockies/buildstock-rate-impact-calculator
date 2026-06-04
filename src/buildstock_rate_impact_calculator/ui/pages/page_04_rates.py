@@ -17,6 +17,7 @@ from __future__ import annotations
 import streamlit as st
 
 from buildstock_rate_impact_calculator.ui.state import AppState
+from buildstock_rate_impact_calculator.ui.project_io import save_project as _save_project
 from buildstock_rate_impact_calculator.ui.components.rate_editor import (
     render_urdb_search,
     render_tou_builder,
@@ -203,6 +204,15 @@ def render_rates_page(app_state: AppState) -> None:
         st.warning("Please select a dataset on the Dataset tab first.")
         return
 
+    # Show missing-rates banner (set by load_project on project load)
+    missing_rates = st.session_state.pop("_missing_rates", None)
+    if missing_rates:
+        st.error(
+            f"⚠️ {len(missing_rates)} rate(s) could not be restored when loading this project: "
+            + ", ".join(f"**{r}**" for r in missing_rates)
+            + ". Please re-add them using the rate input tabs below."
+        )
+
     # ── Derive dataset base_uri for upgrade label lookups ─────────────────────
     _config_key = f"{app_state.dataset_type}_{app_state.release}"
     _base_uri = BuildStockDataManager.DATASET_CONFIGS[_config_key].base_uri
@@ -221,23 +231,31 @@ def render_rates_page(app_state: AppState) -> None:
         if new_rate:
             key = new_rate.get("name", f"URDB Rate {len(rate_library) + 1}")
             rate_library[key] = new_rate
+            if app_state.project_name:
+                _save_project(app_state)
 
     with tou_tab:
         new_rate = render_tou_builder()
         if new_rate:
             key = new_rate.get("name", f"Custom TOU {len(rate_library) + 1}")
             rate_library[key] = new_rate
+            if app_state.project_name:
+                _save_project(app_state)
 
     with flat_tab:
         new_rate = render_flat_rate_form()
         if new_rate:
             key = new_rate.get("name", f"Flat Rate {len(rate_library) + 1}")
             rate_library[key] = new_rate
+            if app_state.project_name:
+                _save_project(app_state)
 
     with fuel_tab:
         new_fuel_rate = _render_fuel_rate_form(fuel_rate_library)
         if new_fuel_rate:
             fuel_rate_library[new_fuel_rate["name"]] = new_fuel_rate
+            if app_state.project_name:
+                _save_project(app_state)
             st.success(f"Added fuel rate: {new_fuel_rate['name']}")
             st.rerun()
 
@@ -270,6 +288,8 @@ def render_rates_page(app_state: AppState) -> None:
                     for sk in list(app_state.rate_assignments.keys()):
                         if app_state.rate_assignments[sk] == rate_name:
                             del app_state.rate_assignments[sk]
+                    if app_state.project_name:
+                        _save_project(app_state)
                     st.rerun()
 
     # Fuel rates per type
@@ -304,6 +324,8 @@ def render_rates_page(app_state: AppState) -> None:
                         for sk in list(app_state.fuel_rate_assignments.keys()):
                             if app_state.fuel_rate_assignments[sk].get(ft) == rate_name:
                                 app_state.fuel_rate_assignments[sk][ft] = None
+                        if app_state.project_name:
+                            _save_project(app_state)
                         st.rerun()
 
     st.divider()

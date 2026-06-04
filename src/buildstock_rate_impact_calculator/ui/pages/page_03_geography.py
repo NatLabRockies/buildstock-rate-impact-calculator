@@ -11,6 +11,7 @@ import streamlit as st
 import polars as pl
 
 from buildstock_rate_impact_calculator.ui.state import AppState
+from buildstock_rate_impact_calculator.ui.project_io import save_project as _save_project
 from buildstock_rate_impact_calculator.data.geo_utils import (
     parse_csv_geo_ids,
     validate_geo_ids,
@@ -77,6 +78,8 @@ def _apply_geographic_selection(app_state: AppState) -> None:
     filtered_metadata = app_state.apply_geo_filter(raw_metadata)
     st.session_state[metadata_key] = filtered_metadata
     app_state.metadata_loaded = True
+    if app_state.project_name:
+        _save_project(app_state)
 
     sum_key = compute_summary_cache_key(app_state)
     with st.spinner("Updating upgrade applicability for selected geography…"):
