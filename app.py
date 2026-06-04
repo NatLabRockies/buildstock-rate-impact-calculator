@@ -1,12 +1,16 @@
 """
 BuildStock Rate Impact Calculator — Streamlit App Entry Point
 """
-import json
 import streamlit as st
 from pathlib import Path
 
 from buildstock_rate_impact_calculator.ui.state import init_session_state
 from buildstock_rate_impact_calculator.core.logger_config import setup_logging
+from buildstock_rate_impact_calculator.ui.sidebar_helpers import (
+    list_projects,
+    default_project_name,
+    browse_folder,
+)
 
 # Configure the single package-level logger for the entire app session
 setup_logging()
@@ -22,12 +26,41 @@ st.set_page_config(
 # ── Initialize session state ─────────────────────────────────────────────────
 app_state = init_session_state()
 
+
+def load_project_placeholder(state):
+    """Stub — actual load logic coming in Phase 4."""
+    st.info(f"Load logic coming in Phase 4 for: {state.project_name}")
+
+
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("⚡ BuildStock Rate Impact Calculator")
     st.divider()
 
-    st.subheader("Settings")
+    # ── Output Directory ──────────────────────────────────────────────────────
+    st.subheader("Output Directory")
+    col_dir, col_browse = st.columns([4, 1])
+    with col_dir:
+        output_dir_str = st.text_input(
+            "Output Directory",
+            value=str(app_state.output_dir),
+            label_visibility="collapsed",
+            help="Local directory where downloaded data and results will be saved.",
+        )
+    with col_browse:
+        if st.button("📂", help="Browse for folder"):
+            picked = browse_folder()
+            if picked:
+                output_dir_str = picked
+                app_state.output_dir = Path(picked)
+
+    if output_dir_str != str(app_state.output_dir):
+        try:
+            app_state.output_dir = Path(output_dir_str)
+        except Exception:
+            st.warning("Invalid directory path.")
+
+    # ── OpenEI API Key ────────────────────────────────────────────────────────
     api_key = st.text_input(
         "OpenEI API Key",
         value=app_state.urdb_api_key,
@@ -37,78 +70,49 @@ with st.sidebar:
     if api_key != app_state.urdb_api_key:
         app_state.urdb_api_key = api_key
 
-    output_dir_str = st.text_input(
-        "Output Directory",
-        value=str(app_state.output_dir),
-        help="Local directory where downloaded data and results will be saved.",
+    st.divider()
+
+    # ── Project Name ──────────────────────────────────────────────────────────
+    project_name_default = (
+        app_state.project_name
+        if app_state.project_name
+        else default_project_name(app_state.output_dir)
     )
-    try:
-        app_state.output_dir = Path(output_dir_str)
-    except Exception:
-        st.warning("Invalid directory path.")
+    project_name_input = st.text_input(
+        "Project Name",
+        value=project_name_default,
+        help="Name for the current project.",
+    )
+    if project_name_input != app_state.project_name:
+        app_state.project_name = project_name_input
+
+    # ── Load Project ──────────────────────────────────────────────────────────
+    st.subheader("Load Project")
+    selected_project = st.selectbox(
+        "Select project",
+        options=[""] + list_projects(app_state.output_dir),
+    )
+    if st.button("Load", key="load_from_dropdown"):
+        if selected_project:
+            app_state.project_name = selected_project
+            load_project_placeholder(app_state)
+
+    st.caption("— or load from path —")
+    load_path_str = st.text_input(
+        "Project path",
+        value="",
+        help="Full path to a project directory to load.",
+    )
+    if st.button("Load", key="load_from_path"):
+        if load_path_str:
+            app_state.project_name = Path(load_path_str).name
+            load_project_placeholder(app_state)
 
     st.divider()
-    st.caption("Steps")
-    steps = [
-        "1. Dataset & Upgrades",
-        "2. Geography",
-        "3. Building Filters",
-        "4. Utility Rates",
-        "5. Run",
-        "6. Results",
-    ]
-    for step in steps:
-        st.markdown(f"- {step}")
-
-    # ── Project config save / load ────────────────────────────────────────────
-    st.divider()
-    st.subheader("Project Config")
-
-    config_path_str = st.text_input(
-        "Config file path",
-        value="project_config.json",
-        help="Path to save or load the project input configuration (JSON).",
-    )
-
-    col_save, col_load = st.columns(2)
-
-    with col_save:
-        if st.button("Save", width='stretch', help="Save current settings to the config file"):
-            try:
-                app_state.save_config(config_path_str)
-                st.success(f"Saved to `{config_path_str}`")
-            except Exception as exc:
-                st.error(f"Save failed: {exc}")
-
-    with col_load:
-        if st.button("Load", width='stretch', help="Load settings from the config file"):
-            try:
-                loaded = app_state.load_config(config_path_str)
-                app_state.apply_config_dict(loaded.to_config_dict())
-                st.success(f"Loaded `{config_path_str}`")
-                st.rerun()
-            except FileNotFoundError:
-                st.error(f"File not found: `{config_path_str}`")
-            except (json.JSONDecodeError, KeyError, TypeError) as exc:
-                st.error(f"Load failed: {exc}")
-
-    uploaded = st.file_uploader(
-        "…or upload a config file",
-        type="json",
-        help="Upload a previously saved project_config.json",
-    )
-    if uploaded is not None:
-        try:
-            data = json.load(uploaded)
-            app_state.apply_config_dict(data)
-            st.success("Config applied from upload.")
-            st.rerun()
-        except (json.JSONDecodeError, KeyError, TypeError) as exc:
-            st.error(f"Upload failed: {exc}")
 
     with st.sidebar.expander("🛠️ Debug Variables"):
         st.write(st.session_state)
-        
+
 # ── Main content ──────────────────────────────────────────────────────────────
 st.title("BuildStock Rate Impact Calculator")
 st.markdown(
