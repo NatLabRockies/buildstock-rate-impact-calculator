@@ -43,6 +43,8 @@ class AppState:
     # Maps scenario key → {fuel_type → rate name (key in fuel_rate_library) or None}
     # fuel_type is one of "natural_gas", "propane", "fuel_oil"
     fuel_rate_assignments: dict[str, dict[str, str | None]] = field(default_factory=dict)
+    # Maps rate name → URDB label (for URDB rates only); used to re-fetch missing rate files
+    rate_label_map: dict[str, str] = field(default_factory=dict)
 
     # ── API / credentials ────────────────────────────────────────────────────
     urdb_api_key: str = ""
@@ -81,6 +83,7 @@ class AppState:
         # they are saved as individual JSON files under project_dir/rates/
         "rate_assignments",
         "fuel_rate_assignments",
+        "rate_label_map",
         "urdb_api_key",
         "output_dir",
         "project_name",
@@ -166,7 +169,18 @@ class AppState:
             setattr(self, key, value)
 
     def save_config(self, path: Path | str) -> None:
-        """Serialise input configuration to *path* as JSON."""
+        """Serialise input configuration to *path* as JSON.
+
+        When ``project_name`` is set, delegates to
+        :func:`~buildstock_rate_impact_calculator.ui.project_io.save_project`
+        which writes ``config.json`` and individual rate files into
+        ``project_dir/``.  The *path* argument is ignored in that case.
+        Otherwise falls back to writing the config dict to *path*.
+        """
+        if self.project_name:
+            from buildstock_rate_impact_calculator.ui.project_io import save_project
+            save_project(self)
+            return
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="utf-8") as fh:
