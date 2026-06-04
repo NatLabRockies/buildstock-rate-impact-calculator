@@ -222,4 +222,26 @@ def load_project(
     # 4. Missing rates flag
     session_state["_missing_rates"] = missing
 
+    # 5. Sync map UI state so the Geographic Selection map reflects the loaded
+    #    selections instead of showing whatever was previously on screen.
+    #    Keys are read by render_map_selector / _render_state_selection_view /
+    #    _render_sub_level_view in map_selector.py.
+    session_state["_map_states_sel"] = set(app_state.selected_states)
+    session_state["_map_selected_states"] = list(app_state.selected_states)
+    session_state["_map_county_sel"] = set(app_state.selected_county_ids)
+    session_state["_map_puma_sel"] = set(app_state.selected_puma_ids)
+    # Choose the most informative view mode automatically:
+    #   county selections → county drill-down view
+    #   puma selections only → puma drill-down view
+    #   otherwise → national state view
+    if app_state.selected_county_ids:
+        session_state["_map_view_mode"] = "county"
+    elif app_state.selected_puma_ids:
+        session_state["_map_view_mode"] = "puma"
+    else:
+        session_state["_map_view_mode"] = "state"
+    # Increment map version so the state choropleth Leaflet instance is
+    # recreated on next render, causing fit_bounds to zoom to the loaded states.
+    session_state["_map_version"] = session_state.get("_map_version", 0) + 1
+
     return missing

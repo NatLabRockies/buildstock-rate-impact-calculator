@@ -169,6 +169,42 @@ def _bbox_center(features: list[dict]) -> tuple[float, float]:
     return (min(lats) + max(lats)) / 2, (min(lngs) + max(lngs)) / 2
 
 
+def _zoom_for_bbox(lat_min: float, lat_max: float, lng_min: float, lng_max: float) -> int:
+    """Estimate an appropriate Leaflet zoom level to fit a geographic bounding box.
+
+    streamlit-folium reads ``zoom_start`` from the Folium map object directly
+    when using ``feature_group_to_add`` and does not execute the ``fitBounds``
+    JavaScript that ``m.fit_bounds()`` injects.  This helper derives a zoom
+    level from the degree span of the bounding box so that ``zoom_start`` is
+    set to a sensible value instead of a hardcoded constant.
+    """
+    max_span = max(lat_max - lat_min, lng_max - lng_min)
+    if max_span <= 0:
+        return 10
+    if max_span < 1:
+        return 10
+    if max_span < 2:
+        return 9
+    if max_span < 4:
+        return 8
+    if max_span < 8:
+        return 7
+    if max_span < 16:
+        return 6
+    if max_span < 32:
+        return 5
+    return 4
+
+
+# ── Static layer styles (defined once at module level) ───────────────────────
+# Using module-level constants avoids re-creating dicts on every fragment rerun
+# and eliminates per-feature conditional branching in the style callbacks.
+_STYLE_SEL   = {"fillColor": "#2196F3", "color": "#1565C0", "weight": 2, "fillOpacity": 0.5}
+_STYLE_UNSEL = {"fillColor": "#ECEFF1", "color": "#78909C", "weight": 1, "fillOpacity": 0.3}
+_STYLE_SEL_SUB   = {"fillColor": "#2196F3", "color": "#1565C0", "weight": 2, "fillOpacity": 0.6}
+_STYLE_UNSEL_SUB = {"fillColor": "#ECEFF1", "color": "#78909C", "weight": 1, "fillOpacity": 0.25}
+
+
 # ── Public component ──────────────────────────────────────────────────────────
 
 def render_map_selector(
@@ -213,7 +249,7 @@ def render_map_selector(
         st.session_state["_map_puma_sel"] = set(initial_puma_ids)
 
     mode = st.session_state["_map_view_mode"]
-
+   
     if mode == "state":
         _render_state_selection_view(initial_states)
         selected_states = st.session_state.get("_map_selected_states", initial_states)
@@ -249,35 +285,63 @@ def _render_state_selection_view(current_states: list[str]) -> None:
 
     geojson = _load_states_geojson()
 
-    # Stable base map — never changes between renders so the Leaflet
-    # instance is preserved (viewport, scroll position, etc.).
-    m = folium.Map(location=[38.5, -96.0], zoom_start=4, tiles="CartoDB positron")
+    _map_version = st.session_state.get("_map_version", 0)
+    _map_key = f"national_map_v{_map_version}"
 
-    def _style(feature):
-        abbr = feature["properties"].get("_abbr", "")
-        if abbr in selected_set:
-            return {"fillColor": "#2196F3", "color": "#1565C0", "weight": 2, "fillOpacity": 0.5}
-        return {"fillColor": "#ECEFF1", "color": "#78909C", "weight": 1, "fillOpacity": 0.3}
+    # Freeze the initial viewport in session state the first time this map
+    # version is rendered.  Subsequent fragment reruns (state clicks) always
+    # pass the same location/zoom_start to folium.Map, so the serialized HTML
+    # is identical and streamlit-folium keeps the existing Leaflet instance
+    # without re-initialising — preventing unwanted re-zoom on every click.
+    _vp_key = f"_national_map_vp_v{_map_version}"
+    if _vp_key not in st.session_state:
+        if selected_set:
+            _sel_init = [f for f in geojson["features"] if f["properties"].get("_abbr", "") in selected_set]
+            _coords: list[list[float]] = []
+            for _f in _sel_init:
+                _coords.extend(_flatten_coords(_f["geometry"]))
+            if _coords:
+                _lats = [c[1] for c in _coords]
+                _lngs = [c[0] for c in _coords]
+                st.session_state[_vp_key] = {
+                    "lat": (min(_lats) + max(_lats)) / 2,
+                    "lng": (min(_lngs) + max(_lngs)) / 2,
+                    "zoom": _zoom_for_bbox(min(_lats), max(_lats), min(_lngs), max(_lngs)),
+                }
+            else:
+                st.session_state[_vp_key] = {"lat": 38.5, "lng": -96.0, "zoom": 4}
+        else:
+            st.session_state[_vp_key] = {"lat": 38.5, "lng": -96.0, "zoom": 4}
 
-    # Put styled GeoJSON in a FeatureGroup so st_folium can swap it
-    # without replacing the entire Leaflet map instance.
+    _vp = st.session_state[_vp_key]
+    m = folium.Map(location=[_vp["lat"], _vp["lng"]], zoom_start=_vp["zoom"], tiles="CartoDB positron")
+
+    # Split into two static-style layers — eliminates 51 per-feature Python
+    # callbacks and lets Folium serialize each layer's style once.
+    _sel_feats   = [f for f in geojson["features"] if f["properties"].get("_abbr", "") in selected_set]
+    _unsel_feats = [f for f in geojson["features"] if f["properties"].get("_abbr", "") not in selected_set]
     fg = folium.FeatureGroup(name="US States")
-    folium.GeoJson(
-        geojson,
-        style_function=_style,
-        tooltip=folium.GeoJsonTooltip(
-            fields=["name", "_abbr"],
-            aliases=["State:", "Code:"],
-            sticky=False,
-        ),
-    ).add_to(fg)
+    if _unsel_feats:
+        folium.GeoJson(
+            {"type": "FeatureCollection", "features": _unsel_feats},
+            style_function=lambda _: _STYLE_UNSEL,
+            tooltip=folium.GeoJsonTooltip(fields=["name", "_abbr"], aliases=["State:", "Code:"], sticky=False),
+            smooth_factor=1.5,
+        ).add_to(fg)
+    if _sel_feats:
+        folium.GeoJson(
+            {"type": "FeatureCollection", "features": _sel_feats},
+            style_function=lambda _: _STYLE_SEL,
+            tooltip=folium.GeoJsonTooltip(fields=["name", "_abbr"], aliases=["State:", "Code:"], sticky=False),
+            smooth_factor=1.5,
+        ).add_to(fg)
 
     map_data = st_folium(
         m,
         feature_group_to_add=fg,
         width="100%",
         height=450,
-        key="national_map",
+        key=_map_key,
         returned_objects=["last_object_clicked", "last_object_clicked_tooltip"],
     )
 
@@ -300,7 +364,7 @@ def _render_state_selection_view(current_states: list[str]) -> None:
             else:
                 selected_set.add(clicked_abbr)
             st.session_state[sel_key] = selected_set
-            st.rerun()
+            st.rerun(scope="fragment")
 
     # ── Display selected states ───────────────────────────────────────────────
     chosen = sorted(selected_set)
@@ -378,46 +442,56 @@ def _render_sub_level_view(selected_states: list[str], geo_level: str) -> None:
         st.warning(f"No {geo_level} boundaries found for the selected states.")
         return
 
-    # Compute bounding box for initial fit
+    # Compute bounding box for initial map viewport.
+    # streamlit-folium uses zoom_start / location directly (fit_bounds JS is
+    # ignored when feature_group_to_add is used), so compute both explicitly.
     all_coords: list[list[float]] = []
     for feat in filtered["features"]:
         all_coords.extend(_flatten_coords(feat["geometry"]))
 
-    center_lat, center_lng = _bbox_center(filtered["features"])
-
-    # Stable base map with initial bounds — the Leaflet instance is
-    # preserved across reruns because the base map doesn't change.
-    m = folium.Map(location=[center_lat, center_lng], zoom_start=6, tiles="CartoDB positron")
     if all_coords:
         lats = [c[1] for c in all_coords]
         lngs = [c[0] for c in all_coords]
-        m.fit_bounds([[min(lats), min(lngs)], [max(lats), max(lngs)]])
+        center_lat = (min(lats) + max(lats)) / 2
+        center_lng = (min(lngs) + max(lngs)) / 2
+        zoom = _zoom_for_bbox(min(lats), max(lats), min(lngs), max(lngs))
+        bounds = [[min(lats), min(lngs)], [max(lats), max(lngs)]]
+    else:
+        center_lat, center_lng = _bbox_center(filtered["features"])
+        zoom = 6
+        bounds = None
 
-    def _style(feature):
-        gj = feature["properties"].get("_gisjoin", "")
-        if gj in selected_set:
-            return {"fillColor": "#2196F3", "color": "#1565C0", "weight": 2, "fillOpacity": 0.6}
-        return {"fillColor": "#ECEFF1", "color": "#78909C", "weight": 1, "fillOpacity": 0.25}
+    m = folium.Map(location=[center_lat, center_lng], zoom_start=zoom, tiles="CartoDB positron")
+    if bounds:
+        m.fit_bounds(bounds)  # applied when streamlit-folium does execute JS
 
-    # Put styled GeoJSON in a FeatureGroup so st_folium can swap it
-    # without replacing the entire Leaflet map instance.
+    # Split into two static-style layers — eliminates per-feature Python callbacks
+    # across potentially thousands of county/PUMA features.
+    _sel_feats   = [f for f in filtered["features"] if f["properties"].get("_gisjoin", "") in selected_set]
+    _unsel_feats = [f for f in filtered["features"] if f["properties"].get("_gisjoin", "") not in selected_set]
     fg = folium.FeatureGroup(name=geo_level.title())
-    folium.GeoJson(
-        filtered,
-        style_function=_style,
-        tooltip=folium.GeoJsonTooltip(
-            fields=[name_field, "_gisjoin"],
-            aliases=[name_alias, "GISJOIN:"],
-            sticky=False,
-        ),
-    ).add_to(fg)
+    if _unsel_feats:
+        folium.GeoJson(
+            {"type": "FeatureCollection", "features": _unsel_feats},
+            style_function=lambda _: _STYLE_UNSEL_SUB,
+            tooltip=folium.GeoJsonTooltip(fields=[name_field, "_gisjoin"], aliases=[name_alias, "GISJOIN:"], sticky=False),
+            smooth_factor=1.5,
+        ).add_to(fg)
+    if _sel_feats:
+        folium.GeoJson(
+            {"type": "FeatureCollection", "features": _sel_feats},
+            style_function=lambda _: _STYLE_SEL_SUB,
+            tooltip=folium.GeoJsonTooltip(fields=[name_field, "_gisjoin"], aliases=[name_alias, "GISJOIN:"], sticky=False),
+            smooth_factor=1.5,
+        ).add_to(fg)
 
+    _map_version = st.session_state.get("_map_version", 0)
     map_data = st_folium(
         m,
         feature_group_to_add=fg,
         width="100%",
         height=500,
-        key=f"sub_map_{geo_level}",
+        key=f"sub_map_{geo_level}_v{_map_version}",
         returned_objects=["last_object_clicked", "last_object_clicked_tooltip"],
     )
 
@@ -436,7 +510,7 @@ def _render_sub_level_view(selected_states: list[str], geo_level: str) -> None:
             else:
                 new_set.add(clicked_id)
             st.session_state[sel_key] = new_set
-            st.rerun()
+            st.rerun(scope="fragment")
 
     # ── Summary row + Clear button ────────────────────────────────────────────
     col1, col2 = st.columns([4, 1])
@@ -451,7 +525,7 @@ def _render_sub_level_view(selected_states: list[str], geo_level: str) -> None:
         if st.button("Clear", key=f"map_clear_{geo_level}"):
             st.session_state[sel_key] = set()
             st.session_state.pop(click_key, None)
-            st.rerun()
+            st.rerun(scope="fragment")
 
 
 # ── Utility-based county selector ─────────────────────────────────────────────
@@ -631,13 +705,13 @@ def _render_utility_county_map(statefps: list[str], matched_gisjoins: set[str]) 
             else:
                 new_set.add(clicked_id)
             st.session_state[sel_key] = new_set
-            st.rerun()
+            st.rerun(scope="fragment")
 
     col1, col2 = st.columns([4, 1])
     with col1:
         if selected_set:
             preview = ", ".join(sorted(selected_set)[:5])
-            suffix = "\u2026" if len(selected_set) > 5 else ""
+            suffix = "…" if len(selected_set) > 5 else ""
             st.caption(f"{len(selected_set)} county(ies) selected: {preview}{suffix}")
         else:
             st.caption("Click counties on the map to select or deselect them.")
@@ -645,4 +719,4 @@ def _render_utility_county_map(statefps: list[str], matched_gisjoins: set[str]) 
         if st.button("Clear", key="utility_map_clear"):
             st.session_state[sel_key] = set()
             st.session_state.pop(click_key, None)
-            st.rerun()
+            st.rerun(scope="fragment")
