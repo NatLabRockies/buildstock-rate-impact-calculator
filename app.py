@@ -17,6 +17,29 @@ from buildstock_rate_impact_calculator.ui.project_io import load_project as _loa
 setup_logging()
 
 
+_API_KEY_FILENAME = ".openei_api_key"
+
+
+def _api_key_path(data_dir: Path) -> Path:
+    return data_dir / _API_KEY_FILENAME
+
+
+def _load_api_key_from_disk(data_dir: Path) -> str | None:
+    """Read the stored API key file. Returns None if absent or unreadable."""
+    try:
+        p = _api_key_path(data_dir)
+        if p.exists():
+            return p.read_text(encoding="utf-8").strip()
+    except OSError:
+        pass
+    return None
+
+
+def _save_api_key_to_disk(data_dir: Path, api_key: str) -> None:
+    data_dir.mkdir(parents=True, exist_ok=True)
+    _api_key_path(data_dir).write_text(api_key.strip(), encoding="utf-8")
+
+
 st.set_page_config(
     page_title="BuildStock Rate Impact Calculator",
     page_icon="⚡",
@@ -26,6 +49,12 @@ st.set_page_config(
 
 # ── Initialize session state ─────────────────────────────────────────────────
 app_state = init_session_state()
+
+# Auto-load API key from disk on first run (before sidebar renders)
+if not app_state.urdb_api_key:
+    stored = _load_api_key_from_disk(app_state.output_dir)
+    if stored:
+        app_state.urdb_api_key = stored
 
 
 def _do_load_project(project_dir: Path, state) -> None:
@@ -48,12 +77,13 @@ with st.sidebar:
     st.title("⚡ BuildStock Rate Impact Calculator")
     st.divider()
 
-    # ── Output Directory ──────────────────────────────────────────────────────
-    st.subheader("Output Directory")
+    # ── Data Directory ────────────────────────────────────────────────────────
+    st.subheader("Data Directory")
+    st.caption("Location where all BuildStock data and project information will be stored.")
     col_dir, col_browse = st.columns([4, 1])
     with col_dir:
         output_dir_str = st.text_input(
-            "Output Directory",
+            "Data Directory",
             value=str(app_state.output_dir),
             label_visibility="collapsed",
             help="Local directory where downloaded data and results will be saved.",
@@ -67,11 +97,24 @@ with st.sidebar:
 
     if output_dir_str != str(app_state.output_dir):
         try:
-            app_state.output_dir = Path(output_dir_str)
+            new_dir = Path(output_dir_str)
+            app_state.output_dir = new_dir
+            # Try to load API key from the new directory
+            stored = _load_api_key_from_disk(new_dir)
+            if stored:
+                app_state.urdb_api_key = stored
         except Exception:
             st.warning("Invalid directory path.")
 
     # ── OpenEI API Key ────────────────────────────────────────────────────────
+    _key_on_disk = _load_api_key_from_disk(app_state.output_dir)
+    _key_stored = bool(_key_on_disk)
+
+    if _key_stored:
+        st.success("API key stored in Data Directory")
+    else:
+        st.error("OpenEI API key not set — required for URDB rate search.")
+
     api_key = st.text_input(
         "OpenEI API Key",
         value=app_state.urdb_api_key,
@@ -80,6 +123,9 @@ with st.sidebar:
     )
     if api_key != app_state.urdb_api_key:
         app_state.urdb_api_key = api_key
+        if api_key:
+            _save_api_key_to_disk(app_state.output_dir, api_key)
+            st.rerun()
 
     st.divider()
 
