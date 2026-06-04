@@ -57,7 +57,7 @@ def _apply_geographic_selection(app_state: AppState) -> None:
             dataset_type=app_state.dataset_type,
             release=app_state.release,
             cache_enabled=True,
-            cache_dir=app_state.output_dir / "cache",
+            cache_dir=app_state.output_dir,
         )
     mgr: BuildStockDataManager = st.session_state[manager_key]
 

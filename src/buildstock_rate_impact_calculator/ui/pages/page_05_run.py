@@ -171,7 +171,7 @@ def _run_pipeline(
             dataset_type=app_state.dataset_type,
             release=app_state.release,
             cache_enabled=True,
-            cache_dir=output_dir / "cache",
+            cache_dir=output_dir,
         )
 
         # ── load metadata to get state mapping ───────────────────────────────
@@ -206,7 +206,7 @@ def _run_pipeline(
             )
 
         # ── download timeseries (or reload from cache) ───────────────────────
-        ts_dir = output_dir / "timeseries"
+        ts_dir = output_dir / "timeseries" / app_state.release
 
         # Build (building_id, upgrade) pairs to download.
         # Each upgrade only downloads timeseries for applicable buildings.
@@ -373,7 +373,8 @@ def _run_pipeline(
             combined = combined.with_columns(total_expr.alias("total_energy_bill"))
 
         result_store["df"] = combined
-        out_csv = output_dir / "bill_results.csv"
+        out_csv = app_state.project_dir / "results" / "bill_results.csv"
+        out_csv.parent.mkdir(parents=True, exist_ok=True)
         combined.write_csv(out_csv)
         tracker.done(message=f"Done! Results saved to {out_csv}")
 

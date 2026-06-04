@@ -5,34 +5,12 @@ import json
 import streamlit as st
 from pathlib import Path
 
-from buildstock_rate_impact_calculator.ui.state import AppState, init_session_state
+from buildstock_rate_impact_calculator.ui.state import init_session_state
 from buildstock_rate_impact_calculator.core.logger_config import setup_logging
 
 # Configure the single package-level logger for the entire app session
 setup_logging()
 
-
-def _sync_rate_libraries(app_state: AppState) -> None:
-    """Rebuild session-state rate libraries from loaded app_state assignments.
-
-    ``rate_library`` and ``fuel_rate_library`` are stored in ``st.session_state``
-    so the rate editor UI can reference them by name.  When a project config is
-    loaded the assignment dicts already contain the full rate structures, so we
-    reconstruct the libraries from those dicts here.
-    """
-    rate_library: dict[str, dict] = {}
-    for rate_dict in app_state.rate_assignments.values():
-        if isinstance(rate_dict, dict) and "name" in rate_dict:
-            rate_library[rate_dict["name"]] = rate_dict
-    st.session_state["rate_library"] = rate_library
-
-    fuel_rate_library: dict[str, dict] = {}
-    for fuel_scenario in app_state.fuel_rate_assignments.values():
-        if isinstance(fuel_scenario, dict):
-            for fuel_rate in fuel_scenario.values():
-                if isinstance(fuel_rate, dict) and "name" in fuel_rate:
-                    fuel_rate_library[fuel_rate["name"]] = fuel_rate
-    st.session_state["fuel_rate_library"] = fuel_rate_library
 
 st.set_page_config(
     page_title="BuildStock Rate Impact Calculator",
@@ -107,7 +85,6 @@ with st.sidebar:
             try:
                 loaded = app_state.load_config(config_path_str)
                 app_state.apply_config_dict(loaded.to_config_dict())
-                _sync_rate_libraries(app_state)
                 st.success(f"Loaded `{config_path_str}`")
                 st.rerun()
             except FileNotFoundError:
@@ -124,7 +101,6 @@ with st.sidebar:
         try:
             data = json.load(uploaded)
             app_state.apply_config_dict(data)
-            _sync_rate_libraries(app_state)
             st.success("Config applied from upload.")
             st.rerun()
         except (json.JSONDecodeError, KeyError, TypeError) as exc:

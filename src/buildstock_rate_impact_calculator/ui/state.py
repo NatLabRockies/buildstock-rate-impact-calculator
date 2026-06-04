@@ -49,6 +49,12 @@ class AppState:
 
     # ── Output ───────────────────────────────────────────────────────────────
     output_dir: Path = field(default_factory=lambda: Path.home() / "buildstock_results")
+    project_name: str = ""
+
+    @property
+    def project_dir(self) -> Path:
+        """Absolute path to this project's directory: output_dir/projects/{project_name}."""
+        return self.output_dir / "projects" / self.project_name
 
     # ── Runtime state ────────────────────────────────────────────────────────
     # Cached metadata DataFrame (not persisted across page navigations directly,
@@ -71,12 +77,13 @@ class AppState:
         "selected_states",
         "selected_county_ids",
         "selected_puma_ids",
-        "rate_library",
-        "fuel_rate_library",
+        # rate_library and fuel_rate_library are intentionally excluded:
+        # they are saved as individual JSON files under project_dir/rates/
         "rate_assignments",
         "fuel_rate_assignments",
         "urdb_api_key",
         "output_dir",
+        "project_name",
     )
 
     def apply_geo_filter(self, metadata_df: Any) -> Any:
