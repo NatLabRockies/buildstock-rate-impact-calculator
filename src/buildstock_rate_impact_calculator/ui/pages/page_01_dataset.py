@@ -17,13 +17,15 @@ _DATASET_DISPLAY_NAMES = {
     "resstock_2024_release_2": "ResStock 2024 Release 2",
     "resstock_2025_release_1": "ResStock 2025 Release 1",
     "comstock_2024_release_2": "ComStock 2024 Release 2",
+    "comstock_2025_release_3": "ComStock 2025 Release 3",
 }
 
 
 def _clear_loaded_dataset_data() -> None:
     """Clear cached dataset managers/metadata and related summary caches."""
+    _prefixes = ("mgr_", "metadata_", "applicability_summary_", "applicable_sets_")
     for key in list(st.session_state.keys()):
-        if key.startswith("mgr_") or key.startswith("metadata_") or key.startswith("applicability_summary_"):
+        if key.startswith(_prefixes):
             st.session_state.pop(key, None)
 
 

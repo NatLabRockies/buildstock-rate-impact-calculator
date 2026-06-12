@@ -21,6 +21,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Any, Optional, Tuple, Union, Set
 from pathlib import Path
 from datetime import datetime, timedelta
+import hashlib
 import json
 import gzip
 import io
@@ -67,11 +68,43 @@ class DatasetConfig:
     propane_bill_column: Optional[str] = None
     fuel_oil_energy_column: Optional[str] = None
     fuel_oil_bill_column: Optional[str] = None
+    # Default electricity bill column (annual USD) for results when no custom rate is defined
+    electricity_bill_column: Optional[str] = None
+    # Building characteristic columns shown as filter dropdowns on the Building
+    # Filters page. Geographic columns (state/county/puma) are handled separately.
+    filter_columns: Optional[List[str]] = None
+    # Sub-state geographic metadata trees (ComStock aggregates). The ComStock
+    # national aggregate deduplicates building instances to state level only, so
+    # county/PUMA selections must load the by_state_and_county / by_state_and_puma
+    # files instead. Maps geo level ('county' | 'puma') to a path under base_uri.
+    geo_metadata_paths: Optional[Dict[str, str]] = None
+    # Filename template for sub-state metadata files, formatted with
+    # {state} (USPS abbr), {level} ('county'/'puma'), {geo_id} (GISJOIN), {token}
+    geo_filename: str = "state={state}/{level}={geo_id}/{state}_{geo_id}_{token}_agg.parquet"
+    geo_baseline_token: str = ""    # e.g. "upgrade0" or "baseline"
+    geo_upgrade_token: str = ""     # e.g. "upgrade{upgrade_id}" or "upgrade{upgrade_id:02d}"
+    # Renames applied on load so geographic columns have canonical names
+    # (e.g. {"in.nhgis_county_gisjoin": "in.county"})
+    geo_column_renames: Optional[Dict[str, str]] = None
 
 
 # OEDI public bucket — HTTPS base used in DATASET_CONFIGS, S3 base for native access
 _OEDI_HTTPS_BASE = "https://oedi-data-lake.s3.amazonaws.com/"
 _OEDI_S3_BASE = "s3://oedi-data-lake/"
+
+# Two-digit state FIPS code → USPS abbreviation (used to resolve the state
+# partition for county/PUMA GISJOIN ids, e.g. 'G0200130' → '02' → 'AK')
+_STATEFP_TO_USPS = {
+    "01": "AL", "02": "AK", "04": "AZ", "05": "AR", "06": "CA", "08": "CO",
+    "09": "CT", "10": "DE", "11": "DC", "12": "FL", "13": "GA", "15": "HI",
+    "16": "ID", "17": "IL", "18": "IN", "19": "IA", "20": "KS", "21": "KY",
+    "22": "LA", "23": "ME", "24": "MD", "25": "MA", "26": "MI", "27": "MN",
+    "28": "MS", "29": "MO", "30": "MT", "31": "NE", "32": "NV", "33": "NH",
+    "34": "NJ", "35": "NM", "36": "NY", "37": "NC", "38": "ND", "39": "OH",
+    "40": "OK", "41": "OR", "42": "PA", "44": "RI", "45": "SC", "46": "SD",
+    "47": "TN", "48": "TX", "49": "UT", "50": "VT", "51": "VA", "53": "WA",
+    "54": "WV", "55": "WI", "56": "WY",
+}
 
 
 class BuildStockDataManager:
@@ -111,11 +144,21 @@ class BuildStockDataManager:
             baseline_filename="baseline_metadata_and_annual_results.parquet",
             upgrade_filename="upgrade{upgrade_id:02d}_metadata_and_annual_results.parquet",
             natural_gas_energy_column="out.natural_gas.total.energy_consumption.kwh",
-            natural_gas_bill_column="out.bills.natural_gas.usd",
             propane_energy_column="out.propane.total.energy_consumption.kwh",
-            propane_bill_column="out.bills.propane.usd",
             fuel_oil_energy_column="out.fuel_oil.total.energy_consumption.kwh",
-            fuel_oil_bill_column="out.bills.fuel_oil.usd",
+            # ResStock 2024 r2 metadata has no per-fuel default bill columns
+            filter_columns=[
+                "in.geometry_building_type_recs",
+                "in.heating_fuel",
+                "in.bedrooms",
+                "in.geometry_floor_area_bin",
+                "in.vintage",
+                "in.tenure",
+                "in.income_recs_2020",
+                "in.hvac_cooling_type",
+                "in.hvac_heating_type",
+                "in.water_heater_fuel",
+            ],
         ),
         'resstock_2025_release_1': DatasetConfig(
             base_uri="https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/2025/resstock_amy2018_release_1",
@@ -130,11 +173,24 @@ class BuildStockDataManager:
             baseline_filename="upgrade0.parquet",
             upgrade_filename="upgrade{upgrade_id}.parquet",
             natural_gas_energy_column="out.natural_gas.total.energy_consumption..kwh",
-            natural_gas_bill_column="out.utility_bills.bills.natural_gas_bill..usd",
+            natural_gas_bill_column="out.utility_bills.natural_gas_bill..usd",
             propane_energy_column="out.propane.total.energy_consumption..kwh",
-            propane_bill_column="out.utility_bills.propane_bills..usd",
+            propane_bill_column="out.utility_bills.propane_bill..usd",
             fuel_oil_energy_column="out.fuel_oil.total.energy_consumption..kwh",
             fuel_oil_bill_column="out.utility_bills.fuel_oil_bill..usd",
+            electricity_bill_column="out.utility_bills.electricity_bill..usd",
+            filter_columns=[
+                "in.geometry_building_type_recs",
+                "in.heating_fuel",
+                "in.bedrooms",
+                "in.geometry_floor_area_bin",
+                "in.vintage",
+                "in.tenure",
+                "in.income_recs_2020",
+                "in.hvac_cooling_type",
+                "in.hvac_heating_type",
+                "in.water_heater_fuel",
+            ],
         ),
         'comstock_2024_release_2': DatasetConfig(
             base_uri="https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/2024/comstock_amy2018_release_2",
@@ -145,13 +201,31 @@ class BuildStockDataManager:
             state_column="in.state",
             expected_resolution_minutes=15,
             supported_upgrades=list(range(40)),  # 0-39 for ComStock
-            metadata_path="metadata_and_annual_results_aggregates/national/basic/parquet",
-            baseline_filename="baseline_agg_basic.parquet",
-            upgrade_filename="upgrade{upgrade_id:02d}_agg_basic.parquet",
+            # Full (not basic) aggregates: basic files lack the fuel energy columns.
+            # Column projection via scan_parquet keeps downloads small regardless.
+            metadata_path="metadata_and_annual_results_aggregates/national/full/parquet",
+            baseline_filename="baseline_agg.parquet",
+            upgrade_filename="upgrade{upgrade_id:02d}_agg.parquet",
             natural_gas_energy_column="out.natural_gas.total.energy_consumption..kwh",
-            propane_energy_column="out.propane.total.energy_consumption..kwh",
-            fuel_oil_energy_column="out.fuel_oil.total.energy_consumption..kwh",
-            # TODO: Add ComStock default bill columns once column names are confirmed
+            # ComStock 2024 r2 has no propane/fuel-oil energy or default bill columns
+            filter_columns=[
+                "in.comstock_building_type",
+                "in.heating_fuel",
+                "in.sqft..ft2",
+                "in.vintage",
+                "in.number_of_stories",
+                "in.hvac_system_type",
+            ],
+            geo_metadata_paths={
+                "county": "metadata_and_annual_results_aggregates/by_state_and_county/full/parquet",
+                "puma": "metadata_and_annual_results_aggregates/by_state_and_puma/full/parquet",
+            },
+            geo_baseline_token="baseline",
+            geo_upgrade_token="upgrade{upgrade_id:02d}",
+            geo_column_renames={
+                "in.nhgis_county_gisjoin": "in.county",
+                "in.nhgis_puma_gisjoin": "in.puma",
+            },
         ),
         'comstock_2025_release_3': DatasetConfig(
             base_uri="https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/2025/comstock_amy2018_release_3",
@@ -162,13 +236,33 @@ class BuildStockDataManager:
             state_column="in.state",
             expected_resolution_minutes=15,
             supported_upgrades=list(range(40)),  # 0-39 for ComStock
-            metadata_path="metadata_and_annual_results_aggregates/national/basic/parquet",
-            baseline_filename="upgrade0_agg_basic.parquet",
-            upgrade_filename="upgrade{upgrade_id}_agg_basic.parquet",
+            # Full (not basic) aggregates: basic files lack the fuel energy columns.
+            # Column projection via scan_parquet keeps downloads small regardless.
+            metadata_path="metadata_and_annual_results_aggregates/national/full/parquet",
+            baseline_filename="upgrade0_agg.parquet",
+            upgrade_filename="upgrade{upgrade_id}_agg.parquet",
             natural_gas_energy_column="out.natural_gas.total.energy_consumption..kwh",
             propane_energy_column="out.propane.total.energy_consumption..kwh",
             fuel_oil_energy_column="out.fuel_oil.total.energy_consumption..kwh",
-            # TODO: Add ComStock default bill columns once column names are confirmed
+            electricity_bill_column="out.utility_bills.electricity_bill_mean..usd",
+            filter_columns=[
+                "in.comstock_building_type",
+                "in.heating_fuel",
+                "in.sqft..ft2",
+                "in.vintage",
+                "in.number_of_stories",
+                "in.hvac_system_type",
+            ],
+            geo_metadata_paths={
+                "county": "metadata_and_annual_results_aggregates/by_state_and_county/full/parquet",
+                "puma": "metadata_and_annual_results_aggregates/by_state_and_puma/full/parquet",
+            },
+            geo_baseline_token="upgrade0",
+            geo_upgrade_token="upgrade{upgrade_id}",
+            geo_column_renames={
+                "in.nhgis_county_gisjoin": "in.county",
+                "in.nhgis_puma_gisjoin": "in.puma",
+            },
         )
     }
     
@@ -235,6 +329,12 @@ class BuildStockDataManager:
         self._metadata = None
         self._filtered_metadata = None
         self._state_mapping = {}
+
+        # Active geographic selection — set via set_geo_selection(). Determines
+        # which metadata files back load_metadata()/load_upgrade_metadata().
+        self.selected_states: List[str] = []
+        self.selected_county_ids: List[str] = []
+        self.selected_puma_ids: List[str] = []
         
         self.logger.info(
             f"Initialized BuildStock data manager: {dataset_type} {release}, "
@@ -284,6 +384,124 @@ class BuildStockDataManager:
         uri = f"{self.config.base_uri}/{self.config.metadata_path}/{filename}"
         return self._to_s3_uri(uri)
 
+    @staticmethod
+    def state_for_gisjoin(geo_id: str) -> Optional[str]:
+        """Return the USPS state abbreviation for a county/PUMA GISJOIN id.
+
+        Example: 'G0200130' → 'AK'. Returns None if the id cannot be parsed.
+        """
+        geo_id = str(geo_id).strip()
+        if len(geo_id) >= 3 and geo_id[0].upper() == "G":
+            return _STATEFP_TO_USPS.get(geo_id[1:3])
+        return None
+
+    def set_geo_selection(
+        self,
+        states: Optional[List[str]] = None,
+        county_ids: Optional[List[str]] = None,
+        puma_ids: Optional[List[str]] = None,
+    ) -> None:
+        """Record the active geographic selection.
+
+        For datasets with sub-state metadata trees (ComStock), county/PUMA
+        selections switch metadata loading to the per-geometry files; the
+        national aggregate only resolves location to state level.
+        """
+        new_states = sorted(states or [])
+        new_counties = sorted(county_ids or [])
+        new_pumas = sorted(puma_ids or [])
+        changed = (
+            new_states != self.selected_states
+            or new_counties != self.selected_county_ids
+            or new_pumas != self.selected_puma_ids
+        )
+        self.selected_states = new_states
+        self.selected_county_ids = new_counties
+        self.selected_puma_ids = new_pumas
+        if changed:
+            # In-memory metadata no longer matches the selection
+            self._metadata = None
+            self._filtered_metadata = None
+            self.logger.info(
+                f"Geo selection set: {len(new_states)} state(s), "
+                f"{len(new_counties)} county(ies), {len(new_pumas)} PUMA(s)"
+            )
+
+    def uses_geo_metadata(self) -> bool:
+        """True when county/PUMA selections require per-geometry metadata files."""
+        return bool(
+            self.config.geo_metadata_paths
+            and (self.selected_county_ids or self.selected_puma_ids)
+        )
+
+    def metadata_uris_for_upgrade(self, upgrade_id: int) -> List[str]:
+        """Return the list of metadata file URIs appropriate for the current
+        geographic selection and the given upgrade.
+
+        Datasets without sub-state metadata trees (ResStock — full county/PUMA
+        resolution in the national file) always get the single national URI.
+        """
+        if not self.uses_geo_metadata():
+            return [self.get_metadata_uri_for_upgrade(upgrade_id)]
+
+        token = (
+            self.config.geo_baseline_token
+            if upgrade_id == 0
+            else self.config.geo_upgrade_token.format(upgrade_id=upgrade_id)
+        )
+        uris: List[str] = []
+        for level, geo_ids in (
+            ("county", self.selected_county_ids),
+            ("puma", self.selected_puma_ids),
+        ):
+            path = (self.config.geo_metadata_paths or {}).get(level)
+            if not path:
+                if geo_ids:
+                    self.logger.warning(
+                        f"No {level}-level metadata path configured; "
+                        f"ignoring {len(geo_ids)} {level} selection(s)."
+                    )
+                continue
+            for geo_id in geo_ids:
+                state = self.state_for_gisjoin(geo_id)
+                if state is None:
+                    self.logger.warning(f"Cannot determine state for {level} id '{geo_id}'; skipping.")
+                    continue
+                rel = self.config.geo_filename.format(
+                    state=state, level=level, geo_id=geo_id, token=token
+                )
+                uris.append(self._to_s3_uri(f"{self.config.base_uri}/{path}/{rel}"))
+        return uris
+
+    def get_app_metadata_columns(self) -> List[str]:
+        """Return the possibly-necessary metadata columns for the app.
+
+        Covers building IDs + geography (for timeseries downloads), the
+        configured characteristic filter columns, upgrade applicability, sample
+        weights, and the annual fuel consumption / default utility bill columns
+        used in results when no custom rate is defined. Columns absent from a
+        given file are skipped at load time.
+        """
+        cols = [
+            self.config.building_id_column,
+            self.config.state_column,
+            "in.county",
+            "in.puma",
+            "weight",
+            "applicability",
+        ]
+        cols += list(self.config.filter_columns or [])
+        for attr in (
+            "natural_gas_energy_column", "natural_gas_bill_column",
+            "propane_energy_column", "propane_bill_column",
+            "fuel_oil_energy_column", "fuel_oil_bill_column",
+            "electricity_bill_column",
+        ):
+            col = getattr(self.config, attr, None)
+            if col:
+                cols.append(col)
+        return list(dict.fromkeys(cols))
+
     def get_fuel_columns_for_type(self, fuel_type: str) -> tuple[Optional[str], Optional[str]]:
         """Return (energy_column, bill_column) for the given fuel type from this dataset's config.
 
@@ -326,106 +544,167 @@ class BuildStockDataManager:
     
     def load_metadata(self, columns: Optional[List[str]] = None, force_reload: bool = False) -> pl.DataFrame:
         """
-        Load metadata from the dataset with intelligent caching.
-        
+        Load baseline metadata restricted to the possibly-necessary columns and
+        the active geographic selection.
+
+        Only the requested columns are downloaded (Parquet column projection via
+        scan_parquet) and each remote file is cached locally. When a county/PUMA
+        selection is active on a dataset with sub-state metadata trees
+        (ComStock), the per-geometry files are loaded instead of the national
+        aggregate, which lacks county/PUMA resolution.
+
         Args:
-            columns: Optional list of columns to load (for memory efficiency)
-            force_reload: Force reload even if cached version exists
-            
+            columns: Optional list of columns to load. Defaults to
+                     get_app_metadata_columns().
+            force_reload: Re-download even if locally cached files exist.
+
         Returns:
-            Metadata as a Polars DataFrame
-            
+            Metadata as a Polars DataFrame.
+
         Raises:
-            Exception: If metadata loading fails
+            Exception: If metadata loading fails.
         """
         self.logger.info(LogMessages.PROCESSING_START.format("metadata loading"))
-        
-        # Check cache first
-        cache_key = f"{self.dataset_type}_{self.release}_metadata.parquet"
-        cache_file = self.cache_metadata_dir / cache_key if self.cache_enabled else None
-        
-        if cache_file and cache_file.exists() and not force_reload:
-            self.logger.info(f"Loading metadata from cache: {cache_file}")
-            try:
-                if columns:
-                    # Deduplicate columns and ensure required columns are included
-                    columns_to_load = self._deduplicate_columns(columns)
-                    
-                    # Check which columns actually exist in cache
-                    # available_columns = list(pl.scan_parquet(cache_file).schema.keys())
-                    available_columns = list(pl.scan_parquet(cache_file).collect_schema().keys())
-                    final_columns = [col for col in columns_to_load if col in available_columns]
-                    
-                    if final_columns:
-                        self._metadata = pl.scan_parquet(cache_file).select(final_columns).collect()
-                    else:
-                        # If no requested columns exist, load all
-                        self._metadata = pl.read_parquet(cache_file)
-                else:
-                    self._metadata = pl.read_parquet(cache_file)
-                    
-                self._update_state_mapping(self._metadata)
-                self.logger.info("Successfully loaded metadata from cache")
-                return self._metadata
-                
-            except Exception as e:
-                self.logger.warning(f"Failed to load from cache: {e}. Fetching fresh data.")
-        
-        # Load fresh metadata based on dataset type
         try:
-            if self.config.metadata_structure == 'parquet':
-                metadata = self._load_metadata_parquet(columns)
-            elif self.config.metadata_structure == 'csv_gz_tar':
+            if self.config.metadata_structure == 'csv_gz_tar':
                 metadata = self._load_metadata_csv_gz_tar(columns)
             else:
-                raise ValueError(f"Unsupported metadata structure: {self.config.metadata_structure}")
-            
+                metadata = self.load_upgrade_metadata(0, columns=columns, force_reload=force_reload)
+
             self._metadata = metadata
-            self._update_state_mapping(self._metadata)
-            
-            # Cache the loaded metadata
-            if self.cache_enabled and cache_file:
-                try:
-                    self._metadata.write_parquet(cache_file, compression='snappy')
-                    self.logger.info(f"Cached metadata to: {cache_file}")
-                except Exception as e:
-                    self.logger.warning(f"Failed to cache metadata: {e}")
-            
+            self._update_state_mapping(metadata)
+
             self.logger.info(LogMessages.PROCESSING_COMPLETE.format("metadata loading"))
             self.logger.debug(LogMessages.data_summary("metadata", metadata))
-            
             return metadata
-            
         except Exception as e:
             self.logger.error(LogMessages.PROCESSING_ERROR.format("metadata loading", str(e)))
             raise
-    
-    def _load_metadata_parquet(self, columns: Optional[List[str]] = None) -> pl.DataFrame:
-        """Load metadata from Parquet format (ResStock)."""
-        self.logger.info(f"Loading Parquet metadata from: {self.metadata_uri}")
 
+    def load_upgrade_metadata(
+        self,
+        upgrade_id: int,
+        columns: Optional[List[str]] = None,
+        force_reload: bool = False,
+    ) -> pl.DataFrame:
+        """
+        Load metadata/annual-results for an upgrade at the appropriate
+        geographic resolution, downloading only the requested columns.
+
+        When the active geo selection includes counties/PUMAs on a dataset with
+        sub-state metadata trees, the per-geometry files are fetched in parallel
+        and concatenated; otherwise the single national file is used.
+
+        Args:
+            upgrade_id: Upgrade scenario ID (0 = baseline).
+            columns: Columns to load (missing ones are skipped per file).
+                     Defaults to get_app_metadata_columns().
+            force_reload: Re-download even if locally cached files exist.
+
+        Returns:
+            Polars DataFrame (geographic columns renamed to canonical
+            in.county / in.puma names where applicable).
+
+        Raises:
+            RuntimeError: If no metadata file could be loaded.
+        """
+        columns = self._deduplicate_columns(columns or self.get_app_metadata_columns())
+        uris = self.metadata_uris_for_upgrade(upgrade_id)
+        if not uris:
+            raise RuntimeError(
+                f"No metadata URIs could be constructed for upgrade {upgrade_id} "
+                f"with the current geographic selection."
+            )
+
+        if len(uris) == 1:
+            return self._cached_metadata_fetch(uris[0], columns, force_reload)
+
+        frames: List[Optional[pl.DataFrame]] = [None] * len(uris)
+        errors: List[str] = []
+        with ThreadPoolExecutor(max_workers=min(self.max_workers, len(uris))) as executor:
+            future_to_idx = {
+                executor.submit(self._cached_metadata_fetch, uri, columns, force_reload): i
+                for i, uri in enumerate(uris)
+            }
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                try:
+                    frames[idx] = future.result()
+                except Exception as exc:
+                    errors.append(f"{uris[idx]}: {exc}")
+
+        loaded = [f for f in frames if f is not None]
+        if errors:
+            self.logger.warning(
+                f"Failed to load {len(errors)}/{len(uris)} metadata file(s) for "
+                f"upgrade {upgrade_id}. First errors: {errors[:3]}"
+            )
+        if not loaded:
+            raise RuntimeError(
+                f"None of the {len(uris)} metadata files for upgrade {upgrade_id} "
+                f"could be loaded. First errors: {errors[:3]}"
+            )
+        # diagonal: county files have in.county, PUMA files in.puma — fill missing with null
+        return pl.concat(loaded, how="diagonal_relaxed")
+
+    def _scan_select_available(self, uri: str, columns: List[str]) -> pl.DataFrame:
+        """Scan a Parquet URI, select only the requested columns that exist
+        (including raw names of configured geo-column renames), rename
+        geographic columns to canonical names, and collect."""
+        renames = self.config.geo_column_renames or {}
+        storage = None if "://" not in uri or uri.startswith("file://") else self._S3_ANON
+        lf = (
+            pl.scan_parquet(uri, storage_options=storage)
+            if storage else pl.scan_parquet(uri)
+        )
+        schema_cols = list(lf.collect_schema().keys())
+        wanted = set(columns)
+        raw_for_canonical = {raw for raw, canon in renames.items() if canon in wanted}
+        select_cols = [c for c in schema_cols if c in wanted or c in raw_for_canonical]
+        if not select_cols:
+            raise ValueError(
+                f"None of the requested columns exist in {uri} "
+                f"(requested {len(columns)}, file has {len(schema_cols)})"
+            )
+        df = lf.select(select_cols).collect()
+        applicable_renames = {
+            raw: canon for raw, canon in renames.items()
+            if raw in df.columns and canon not in df.columns
+        }
+        if applicable_renames:
+            df = df.rename(applicable_renames)
+        return df
+
+    def _cached_metadata_fetch(
+        self, uri: str, columns: List[str], force_reload: bool = False
+    ) -> pl.DataFrame:
+        """Fetch one metadata file with column projection, caching the projected
+        result locally so repeated loads avoid the network."""
+        if not self.cache_enabled:
+            return self._scan_select_available(uri, columns)
+
+        col_hash = hashlib.md5("|".join(sorted(columns)).encode()).hexdigest()[:8]
+        # e.g. 'state=AK_county=G0200130_AK_G0200130_upgrade0_agg' or national filename
+        tail = "_".join(uri.split("/")[-3:]).replace("=", "-")
+        tail = tail.rsplit(".parquet", 1)[0]
+        cache_file = (
+            self.cache_metadata_dir
+            / f"{self.dataset_type}_{self.release}"
+            / f"{tail}_{col_hash}.parquet"
+        )
+        if cache_file.exists() and not force_reload:
+            try:
+                return pl.read_parquet(cache_file)
+            except Exception as exc:
+                self.logger.warning(f"Could not read metadata cache {cache_file}: {exc}. Re-fetching.")
+
+        df = self._scan_select_available(uri, columns)
         try:
-            if columns:
-                columns_to_load = self._deduplicate_columns(columns)
-                metadata = (
-                    pl.scan_parquet(
-                        self.metadata_uri,
-                        storage_options=self._S3_ANON
-                    )
-                    .select(columns_to_load)
-                    .collect()
-                )
-            else:
-                metadata = pl.read_parquet(
-                    self.metadata_uri,
-                    storage_options=self._S3_ANON
-                )
-
-            return metadata
-
-        except Exception as e:
-            self.logger.error(f"Error loading Parquet metadata: {e}")
-            raise
+            cache_file.parent.mkdir(parents=True, exist_ok=True)
+            df.write_parquet(cache_file, compression="snappy")
+        except Exception as exc:
+            self.logger.warning(f"Failed to cache metadata to {cache_file}: {exc}")
+        return df
     
     def _load_metadata_csv_gz_tar(self, columns: Optional[List[str]] = None) -> pl.DataFrame:
         """Load metadata from CSV.GZ.TAR format (ComStock)."""
@@ -629,9 +908,12 @@ class BuildStockDataManager:
         Return a mapping of building_id → applicable (bool) for the given upgrade.
 
         For upgrade 0 (baseline), all buildings are treated as applicable.
-        For non-baseline upgrades, reads the ``applicability`` column from the
-        upgrade metadata parquet. Buildings absent from the upgrade metadata
-        are treated as not applicable.
+        For non-baseline upgrades, reads the upgrade metadata at the appropriate
+        geographic resolution (per-geometry files when a county/PUMA selection
+        is active on a dataset with sub-state metadata trees). Uses the
+        ``applicability`` column when present, otherwise falls back to checking
+        for non-null ``upgrade.*`` columns. Buildings absent from the upgrade
+        metadata are treated as not applicable.
 
         Args:
             upgrade_id: Upgrade scenario ID (0 = baseline, always True).
@@ -643,39 +925,53 @@ class BuildStockDataManager:
         if upgrade_id == 0:
             return {bid: True for bid in building_ids}
 
-        uri = self.get_metadata_uri_for_upgrade(upgrade_id)
         bldg_col = self.config.building_id_column
 
-        try:
-            # df = (
-            #     pl.scan_parquet(uri, storage_options=self._S3_ANON)
-            #     .select([bldg_col, "applicability"])
-            #     .filter(pl.col(bldg_col).is_in(building_ids))
-            #     .collect()
-            # )
-            # result: Dict[Any, bool] = {
-            #     row[bldg_col]: bool(row["applicability"])
-            #     for row in df.iter_rows(named=True)
-            # }
-            # # Buildings absent from the upgrade metadata default to not applicable
-            # for bid in building_ids:
-            #     if bid not in result:
-            #         result[bid] = False
-            # return result
-            df = (
-                pl.scan_parquet(uri, storage_options=self._S3_ANON)
-                .filter(
-                    pl.any_horizontal(
-                        cs.starts_with('upgrade.').is_not_null()
-                    )
+        def _fetch_applicable_ids(uri: str) -> Set[Any]:
+            lf = pl.scan_parquet(uri, storage_options=self._S3_ANON)
+            schema = lf.collect_schema()
+            if schema.get("applicability") == pl.Boolean:
+                df = (
+                    lf.filter(pl.col("applicability"))
+                    .select(bldg_col)
+                    .collect()
                 )
-                .select('bldg_id')
-                .collect()
-            )
-            applicable_ids = set(df.to_series().to_list())
+            elif "applicability" in schema:
+                df = (
+                    lf.filter(
+                        pl.col("applicability").cast(pl.Utf8).str.to_lowercase() == "true"
+                    )
+                    .select(bldg_col)
+                    .collect()
+                )
+            else:
+                df = (
+                    lf.filter(
+                        pl.any_horizontal(cs.starts_with("upgrade.").is_not_null())
+                    )
+                    .select(bldg_col)
+                    .collect()
+                )
+            return set(df.to_series().to_list())
+
+        try:
+            uris = self.metadata_uris_for_upgrade(upgrade_id)
+            applicable_ids: Set[Any] = set()
+            if len(uris) == 1:
+                applicable_ids = _fetch_applicable_ids(uris[0])
+            else:
+                with ThreadPoolExecutor(max_workers=min(self.max_workers, len(uris))) as executor:
+                    futures = {executor.submit(_fetch_applicable_ids, uri): uri for uri in uris}
+                    for future in as_completed(futures):
+                        try:
+                            applicable_ids |= future.result()
+                        except Exception as exc:
+                            self.logger.warning(
+                                f"Applicability fetch failed for {futures[future]}: {exc}"
+                            )
             result = dict.fromkeys(building_ids, False)
-            for ids in applicable_ids.intersection(building_ids):
-                result[ids] = True
+            for bid in applicable_ids.intersection(building_ids):
+                result[bid] = True
             return result
         except Exception as exc:
             self.logger.warning(

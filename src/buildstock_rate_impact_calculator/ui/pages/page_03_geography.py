@@ -8,7 +8,6 @@ Three input modes:
 """
 from __future__ import annotations
 import streamlit as st
-import polars as pl
 
 from buildstock_rate_impact_calculator.ui.state import AppState
 from buildstock_rate_impact_calculator.ui.project_io import save_project as _save_project
@@ -17,30 +16,26 @@ from buildstock_rate_impact_calculator.data.geo_utils import (
     validate_geo_ids,
     get_utility_list,
 )
-from buildstock_rate_impact_calculator.data.buildstock_manager import BuildStockDataManager
-from buildstock_rate_impact_calculator.data.upgrade_labels import get_upgrade_label
 from buildstock_rate_impact_calculator.ui.components.map_selector import render_map_selector, render_utility_map_selector
 from buildstock_rate_impact_calculator.ui.applicability import (
     compute_summary_cache_key,
-    load_applicability_summary,
+    render_applicability_table,
+)
+from buildstock_rate_impact_calculator.ui.metadata_session import (
+    get_session_metadata,
+    load_session_metadata,
 )
 
 
-def _format_bytes(n: int) -> str:
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if n < 1024:
-            return f"{n:.1f} {unit}"
-        n //= 1024
-    return f"{n:.1f} PB"
-
-
 def _apply_geographic_selection(app_state: AppState) -> None:
-    """Filter cached metadata to current geo selections and refresh the
-    applicability summary in session state.
+    """Load metadata for the current geographic selection and refresh the
+    applicability summary.
 
-    Called after the user clicks any Save / Apply button on this page.
-    Preserves a raw, unfiltered copy of the metadata so subsequent selection
-    changes can re-filter from the full dataset.
+    Called after the user clicks any Save / Apply button on this page. This is
+    the point where metadata is first downloaded — at the appropriate
+    geographic resolution (ComStock county/PUMA selections load the
+    by_state_and_county / by_state_and_puma files) and restricted to the
+    possibly-necessary columns.
     """
     if not app_state.dataset_type or not app_state.release:
         st.warning("Select a dataset on the Dataset tab before saving geographic selections.")
@@ -49,42 +44,27 @@ def _apply_geographic_selection(app_state: AppState) -> None:
         st.warning("Select upgrade scenarios on the Dataset tab before saving geographic selections.")
         return
 
-    manager_key = f"mgr_{app_state.dataset_type}_{app_state.release}"
-    metadata_key = f"metadata_{app_state.dataset_type}_{app_state.release}"
-    metadata_raw_key = f"metadata_raw_{app_state.dataset_type}_{app_state.release}"
+    with st.spinner("Loading building metadata for the selected geographies…"):
+        try:
+            mgr, metadata = load_session_metadata(app_state)
+        except Exception as exc:
+            st.error(f"Failed to load metadata: {exc}")
+            return
 
-    if manager_key not in st.session_state:
-        st.session_state[manager_key] = BuildStockDataManager(
-            dataset_type=app_state.dataset_type,
-            release=app_state.release,
-            cache_enabled=True,
-            cache_dir=app_state.output_dir,
-        )
-    mgr: BuildStockDataManager = st.session_state[manager_key]
-
-    # Ensure we have a raw copy to filter from.
-    if metadata_raw_key not in st.session_state:
-        if metadata_key in st.session_state:
-            st.session_state[metadata_raw_key] = st.session_state[metadata_key]
-        else:
-            with st.spinner("Loading building metadata…"):
-                try:
-                    st.session_state[metadata_raw_key] = mgr.load_metadata()
-                except Exception as exc:
-                    st.error(f"Failed to load metadata: {exc}")
-                    return
-
-    raw_metadata = st.session_state[metadata_raw_key]
-    filtered_metadata = app_state.apply_geo_filter(raw_metadata)
-    st.session_state[metadata_key] = filtered_metadata
-    app_state.metadata_loaded = True
+    geo_filtered = app_state.apply_geo_filter(metadata)
     if app_state.project_name:
         _save_project(app_state)
 
     sum_key = compute_summary_cache_key(app_state)
     with st.spinner("Updating upgrade applicability for selected geography…"):
+        from buildstock_rate_impact_calculator.ui.applicability import (
+            load_applicability_summary,
+        )
         st.session_state[sum_key] = load_applicability_summary(
-            app_state, metadata=filtered_metadata, manager=mgr
+            app_state,
+            metadata=geo_filtered,
+            manager=mgr,
+            applicable_sets_cache=st.session_state,
         )
 
 
@@ -103,52 +83,21 @@ def _render_applicability_table(app_state: AppState) -> None:
         or app_state.selected_puma_ids
         or app_state.selected_geo_ids
     )
+    summary_exists = st.session_state.get(compute_summary_cache_key(app_state)) is not None
+    metadata_loaded = get_session_metadata(app_state) is not None
 
-    sum_key = compute_summary_cache_key(app_state)
-    summary = st.session_state.get(sum_key)
-
-    # Auto-compute the summary on first render when a project config has
-    # populated geo selections but no summary has been cached yet.
-    if summary is None and has_geo_selections:
-        _apply_geographic_selection(app_state)
-        summary = st.session_state.get(sum_key)
-
-    if not summary:
+    if not (has_geo_selections or summary_exists or metadata_loaded):
         return
+
+    # Auto-compute on first render when a loaded project has geo selections but
+    # no metadata/summary has been loaded yet in this session.
+    if has_geo_selections and not summary_exists and not metadata_loaded:
+        _apply_geographic_selection(app_state)
 
     st.divider()
-    st.markdown("**Applicability after geographic filtering**")
-
-    if "error" in summary:
-        st.warning(f"Could not load applicability data: {summary['error']}")
-        return
-
-    cfg_key = f"{app_state.dataset_type}_{app_state.release}"
-    base_uri = BuildStockDataManager.DATASET_CONFIGS[cfg_key].base_uri
-
-    tbl_rows = []
-    for row in summary.get("rows", []):
-        uid = row["upgrade_id"]
-        try:
-            label = get_upgrade_label(base_uri, uid)
-        except Exception:
-            label = f"Upgrade {uid}"
-        scenario_label = label if uid == 0 else f"Upgrade {uid}: {label}"
-        pct = row["n_applicable"] / row["n_total"] * 100 if row["n_total"] > 0 else 0.0
-        tbl_rows.append({
-            "Scenario": scenario_label,
-            "Applicable": f"{row['n_applicable']:,} / {row['n_total']:,} ({pct:.0f}%)",
-            "Est. Download": _format_bytes(row["est_bytes"]),
-        })
-
-    if tbl_rows:
-        st.dataframe(
-            pl.DataFrame(tbl_rows).to_pandas(),
-            hide_index=True,
-            width="stretch",
-        )
-        total_est = sum(r["est_bytes"] for r in summary.get("rows", []))
-        st.caption(f"Total estimated download: {_format_bytes(total_est)}")
+    render_applicability_table(
+        app_state, title="Applicability after geographic filtering"
+    )
 
 
 def render_geography_page(app_state: AppState) -> None:

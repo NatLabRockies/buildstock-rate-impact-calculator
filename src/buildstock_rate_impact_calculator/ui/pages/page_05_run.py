@@ -17,19 +17,9 @@ import polars as pl
 from buildstock_rate_impact_calculator.ui.state import AppState
 from buildstock_rate_impact_calculator.ui.project_io import save_project as _save_project
 from buildstock_rate_impact_calculator.ui.components.progress_tracker import ProgressTracker
-from buildstock_rate_impact_calculator.data.upgrade_labels import get_upgrade_label
 from buildstock_rate_impact_calculator.ui.applicability import (
-    compute_summary_cache_key as _compute_summary_cache_key,
-    load_applicability_summary as _load_applicability_summary,
+    render_applicability_table as _render_applicability_table,
 )
-
-
-def _format_bytes(n: int) -> str:
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if n < 1024:
-            return f"{n:.1f} {unit}"
-        n //= 1024
-    return f"{n:.1f} PB"
 
 
 def _urdb_key_required(rate_assignments: dict, rate_library: dict) -> bool:
@@ -44,15 +34,6 @@ def _urdb_key_required(rate_assignments: dict, rate_library: dict) -> bool:
 
 def _scenario_key(upgrade_id: int) -> str:
     return "baseline" if upgrade_id == 0 else f"upgrade_{upgrade_id}"
-
-
-def _scenario_display(base_uri: str, upgrade_id: int) -> str:
-    """Return a human-readable label for an upgrade scenario."""
-    try:
-        label = get_upgrade_label(base_uri, upgrade_id)
-    except Exception:
-        label = f"Upgrade {upgrade_id}"
-    return label if upgrade_id == 0 else f"Upgrade {upgrade_id}: {label}"
 
 
 def _calculate_fuel_bills(
@@ -92,25 +73,17 @@ def _calculate_fuel_bills(
     needed_cols = [mgr.config.building_id_column] + [col for _, _, col, _ in fuel_type_columns]
 
     try:
-        upgrade_meta_uri = mgr.get_metadata_uri_for_upgrade(upgrade_id)
         tracker.update(0, message=f"Loading fuel/default bill data for upgrade {upgrade_id}…")
-
-        if mgr.config.metadata_structure == "parquet":
-            # Load only needed columns if possible
-            import polars as pl
-            try:
-                available = list(pl.scan_parquet(upgrade_meta_uri).collect_schema().keys())
-                cols_to_load = [c for c in needed_cols if c in available]
-                upgrade_meta = pl.scan_parquet(upgrade_meta_uri).select(cols_to_load).collect()
-            except Exception:
-                upgrade_meta = pl.read_parquet(upgrade_meta_uri)
-        else:
-            # For non-parquet (e.g. ComStock csv.gz), load full metadata — expensive but necessary
-            upgrade_meta = mgr.load_metadata(force_reload=False)  # use cached baseline as fallback
+        # Geo-resolution-aware load with column projection: only the needed
+        # columns are downloaded, and ComStock county/PUMA selections read the
+        # per-geometry aggregate files. Missing columns are skipped per file.
+        upgrade_meta = mgr.load_upgrade_metadata(upgrade_id, columns=needed_cols)
 
         # Filter to selected buildings
         bldg_col = mgr.config.building_id_column
-        upgrade_meta = upgrade_meta.filter(pl.col(bldg_col).is_in(building_ids))
+        upgrade_meta = upgrade_meta.filter(pl.col(bldg_col).is_in(building_ids)).unique(
+            subset=[bldg_col]
+        )
 
     except Exception as exc:
         tracker.update(0, message=f"Warning: Could not load fuel metadata for upgrade {upgrade_id}: {exc}")
@@ -167,22 +140,32 @@ def _run_pipeline(
         output_dir = app_state.output_dir
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # ── build manager ────────────────────────────────────────────────────
+        # ── build manager with the active geographic selection ───────────────
         mgr = BuildStockDataManager(
             dataset_type=app_state.dataset_type,
             release=app_state.release,
             cache_enabled=True,
             cache_dir=output_dir,
         )
+        _sel = app_state.effective_geo_selection()
+        mgr.set_geo_selection(
+            states=_sel["states"],
+            county_ids=_sel["county_ids"],
+            puma_ids=_sel["puma_ids"],
+        )
 
-        # ── load metadata to get state mapping ───────────────────────────────
+        # ── load metadata (geo-appropriate files, needed columns only) ───────
         tracker.update(0, message="Loading building metadata…")
         metadata = mgr.load_metadata()
         metadata = app_state.apply_geo_filter(metadata)
         if app_state.active_filters:
-            metadata = mgr.filter_metadata(metadata, app_state.active_filters)
+            _filters = {
+                k: v for k, v in app_state.active_filters.items()
+                if k in metadata.columns
+            }
+            metadata = mgr.filter_metadata(metadata, _filters)
 
-        building_ids = mgr.get_building_ids(metadata)
+        building_ids = list(dict.fromkeys(mgr.get_building_ids(metadata)))
 
         if tracker.is_cancelled():
             tracker.done(message="Cancelled before download.")
@@ -433,46 +416,13 @@ def render_run_page(app_state: AppState) -> None:
             else:
                 st.caption("No building attribute filters applied.")
 
-    # ── Upgrade applicability summary (auto-loaded, cached per config hash) ───
-    st.markdown("**Upgrade Applicability Summary**")
-    _sum_key = _compute_summary_cache_key(app_state)
-    _ref_col, _ = st.columns([1, 7])
-    with _ref_col:
-        if st.button(
-            "↺ Refresh",
-            key="btn_refresh_applicability",
-            help="Re-fetch applicability data from OEDI",
-        ):
-            st.session_state.pop(_sum_key, None)
-            st.rerun()
-    if _sum_key not in st.session_state:
-        with st.spinner("Loading upgrade applicability from OEDI…"):
-            st.session_state[_sum_key] = _load_applicability_summary(app_state)
-    _summary = st.session_state[_sum_key]
-    if "error" in _summary:
-        st.warning(f"Could not load applicability data: {_summary['error']}")
-    else:
-        _cfg_key = f"{app_state.dataset_type}_{app_state.release}"
-        from buildstock_rate_impact_calculator.data.buildstock_manager import BuildStockDataManager as _BMgr
-        _base_uri = _BMgr.DATASET_CONFIGS[_cfg_key].base_uri
-        _tbl_rows = []
-        for _row in _summary.get("rows", []):
-            _uid = _row["upgrade_id"]
-            _lbl = _scenario_display(_base_uri, _uid)
-            _pct = _row["n_applicable"] / _row["n_total"] * 100 if _row["n_total"] > 0 else 0.0
-            _tbl_rows.append({
-                "Scenario": _lbl,
-                "Applicable": f"{_row['n_applicable']:,} / {_row['n_total']:,} ({_pct:.0f}%)",
-                "Est. Download": _format_bytes(_row["est_bytes"]),
-            })
-        if _tbl_rows:
-            st.dataframe(
-                pl.DataFrame(_tbl_rows).to_pandas(),
-                hide_index=True,
-                width='stretch',
-            )
-            _total_est = sum(r["est_bytes"] for r in _summary.get("rows", []))
-            st.caption(f"Total estimated download: {_format_bytes(_total_est)}")
+    # ── Upgrade applicability summary (cached; reflects geo + filters) ───────
+    _render_applicability_table(
+        app_state,
+        title="Upgrade Applicability Summary",
+        show_refresh=True,
+        key_prefix="run_",
+    )
 
     assigned = len(app_state.rate_assignments)
     total_scenarios = len(app_state.selected_upgrades)

@@ -130,6 +130,7 @@ with st.sidebar:
     st.divider()
 
     # ── Project Name ──────────────────────────────────────────────────────────
+    st.subheader("New Project")
     project_name_default = (
         app_state.project_name
         if app_state.project_name

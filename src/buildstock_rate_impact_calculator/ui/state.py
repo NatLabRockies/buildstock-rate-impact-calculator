@@ -89,46 +89,70 @@ class AppState:
         "project_name",
     )
 
+    @staticmethod
+    def _to_gisjoin(geo_id: str, level: str) -> str:
+        """Normalize a county/PUMA id to GISJOIN format.
+
+        County FIPS '08069' → 'G0800690'; PUMA '0800803' → 'G08000803'.
+        Ids already in GISJOIN format (leading 'G') are returned unchanged.
+        """
+        gid = str(geo_id).strip()
+        if gid[:1].upper() == "G":
+            return gid
+        digits = "".join(ch for ch in gid if ch.isdigit())
+        if level == "county" and len(digits) == 5:
+            return f"G{digits[:2]}0{digits[2:]}0"
+        if level == "puma" and len(digits) == 7:
+            return f"G{digits[:2]}0{digits[2:]}"
+        return gid
+
+    def effective_geo_selection(self) -> dict[str, list[str]]:
+        """Resolve the active geographic selection as GISJOIN-normalized lists.
+
+        Map-based selections take priority; legacy ``selected_geo_ids`` (CSV
+        upload) are folded in by ``geo_level`` when the map fields are empty.
+
+        Returns:
+            Dict with keys ``states``, ``county_ids``, ``puma_ids``.
+        """
+        states = list(self.selected_states)
+        counties = [self._to_gisjoin(g, "county") for g in self.selected_county_ids]
+        pumas = [self._to_gisjoin(g, "puma") for g in self.selected_puma_ids]
+
+        if not (states or counties or pumas) and self.selected_geo_ids:
+            if self.geo_level == "state":
+                states = list(self.selected_geo_ids)
+            elif self.geo_level == "county":
+                counties = [self._to_gisjoin(g, "county") for g in self.selected_geo_ids]
+            elif self.geo_level == "puma":
+                pumas = [self._to_gisjoin(g, "puma") for g in self.selected_geo_ids]
+
+        return {"states": states, "county_ids": counties, "puma_ids": pumas}
+
     def apply_geo_filter(self, metadata_df: Any) -> Any:
         """Apply geographic filters to a metadata DataFrame.
 
-        Uses OR logic when both county and PUMA selections exist.
-        Falls back to legacy ``selected_geo_ids`` when the new fields are empty.
+        Uses OR logic when both county and PUMA selections exist; falls back to
+        state filtering otherwise. Legacy ``selected_geo_ids`` are resolved via
+        effective_geo_selection().
         """
         import polars as pl
 
-        # New map-based selections take priority
-        if self.selected_county_ids or self.selected_puma_ids:
-            conditions = []
-            if self.selected_county_ids and "in.county" in metadata_df.columns:
-                conditions.append(
-                    pl.col("in.county").is_in(self.selected_county_ids)
-                )
-            if self.selected_puma_ids and "in.puma" in metadata_df.columns:
-                conditions.append(
-                    pl.col("in.puma").is_in(self.selected_puma_ids)
-                )
-            if conditions:
-                combined = conditions[0]
-                for cond in conditions[1:]:
-                    combined = combined | cond
-                return metadata_df.filter(combined)
-        elif self.selected_states:
-            if "in.state" in metadata_df.columns:
-                return metadata_df.filter(pl.col("in.state").is_in(self.selected_states))
+        sel = self.effective_geo_selection()
 
-        # Legacy fallback (CSV Upload / By Utility tabs)
-        if self.selected_geo_ids:
-            if self.geo_level == "state" and "in.state" in metadata_df.columns:
-                return metadata_df.filter(pl.col("in.state").is_in(self.selected_geo_ids))
-            elif self.geo_level == "county" and "in.county" in metadata_df.columns:
-                return metadata_df.filter(
-                    pl.col("in.county").is_in(self.selected_geo_ids)
-                )
-            elif self.geo_level == "puma" and "in.puma" in metadata_df.columns:
-                return metadata_df.filter(
-                    pl.col("in.puma").is_in(self.selected_geo_ids)
-                )
+        conditions = []
+        if sel["county_ids"] and "in.county" in metadata_df.columns:
+            conditions.append(pl.col("in.county").is_in(sel["county_ids"]))
+        if sel["puma_ids"] and "in.puma" in metadata_df.columns:
+            conditions.append(pl.col("in.puma").is_in(sel["puma_ids"]))
+        if conditions:
+            combined = conditions[0]
+            for cond in conditions[1:]:
+                combined = combined | cond
+            return metadata_df.filter(combined)
+
+        if sel["states"] and "in.state" in metadata_df.columns:
+            return metadata_df.filter(pl.col("in.state").is_in(sel["states"]))
 
         return metadata_df
 

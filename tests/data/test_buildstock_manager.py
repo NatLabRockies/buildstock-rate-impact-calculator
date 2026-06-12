@@ -43,10 +43,11 @@ _EXPECTED_S3_METADATA_URI = (
     "/metadata_and_annual_results/national/full/parquet/upgrade0.parquet"
 )
 
+# ResStock 2025 r1 upgrade files are NOT zero-padded on OEDI (upgrade1.parquet)
 _EXPECTED_S3_UPGRADE1_URI = (
     "s3://oedi-data-lake/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock"
     "/2025/resstock_amy2018_release_1"
-    "/metadata_and_annual_results/national/full/parquet/upgrade01.parquet"
+    "/metadata_and_annual_results/national/full/parquet/upgrade1.parquet"
 )
 
 
@@ -191,10 +192,10 @@ class TestMetadataUriConstruction:
         uri = mgr.get_metadata_uri_for_upgrade(1)
         assert uri == _EXPECTED_S3_UPGRADE1_URI
 
-    def test_upgrade_uri_zero_pads_id(self, tmp_path: Path) -> None:
+    def test_upgrade_uri_not_zero_padded_resstock_2025(self, tmp_path: Path) -> None:
         mgr = _make_mgr(tmp_path)
         uri = mgr.get_metadata_uri_for_upgrade(9)
-        assert "upgrade09" in uri
+        assert uri.endswith("upgrade9.parquet")
 
     def test_upgrade_uri_double_digit(self, tmp_path: Path) -> None:
         mgr = _make_mgr(tmp_path)
