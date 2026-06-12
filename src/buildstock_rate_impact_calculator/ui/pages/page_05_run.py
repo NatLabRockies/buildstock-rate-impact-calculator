@@ -8,8 +8,6 @@ progress feedback. Supports cancellation.
 from __future__ import annotations
 import os
 import threading
-import time
-from pathlib import Path
 
 import streamlit as st
 import polars as pl
@@ -155,7 +153,7 @@ def _run_pipeline(
         )
 
         # ── load metadata (geo-appropriate files, needed columns only) ───────
-        tracker.update(0, message="Loading building metadata…")
+        tracker.start_phase("Loading building metadata")
         metadata = mgr.load_metadata()
         metadata = app_state.apply_geo_filter(metadata)
         if app_state.active_filters:
@@ -166,28 +164,27 @@ def _run_pipeline(
             metadata = mgr.filter_metadata(metadata, _filters)
 
         building_ids = list(dict.fromkeys(mgr.get_building_ids(metadata)))
+        tracker.log(f"Metadata loaded — {len(building_ids):,} buildings match the current filters.")
 
         if tracker.is_cancelled():
             tracker.done(message="Cancelled before download.")
             return
 
         # ── fetch upgrade applicability ───────────────────────────────────────
+        _non_baseline = [u for u in app_state.selected_upgrades if u != 0]
         upgrade_applicable_ids: dict[int, list] = {0: list(building_ids)}
-        for _upg_id in app_state.selected_upgrades:
-            if _upg_id == 0:
-                continue
-            tracker.update(0, message=f"Fetching applicability for upgrade {_upg_id}…")
-            _applicability = mgr.get_upgrade_applicability(_upg_id, building_ids)
-            upgrade_applicable_ids[_upg_id] = [
-                bid for bid, v in _applicability.items() if v
-            ]
-            tracker.update(
-                0,
-                message=(
+        if _non_baseline:
+            tracker.start_phase("Checking upgrade applicability", total=len(_non_baseline))
+            for _upg_id in _non_baseline:
+                _applicability = mgr.get_upgrade_applicability(_upg_id, building_ids)
+                upgrade_applicable_ids[_upg_id] = [
+                    bid for bid, v in _applicability.items() if v
+                ]
+                tracker.advance(1)
+                tracker.log(
                     f"Upgrade {_upg_id}: "
                     f"{len(upgrade_applicable_ids[_upg_id]):,}/{len(building_ids):,} applicable."
-                ),
-            )
+                )
 
         # ── download timeseries (or reload from cache) ───────────────────────
         ts_dir = output_dir / "timeseries" / app_state.release
@@ -218,7 +215,9 @@ def _run_pipeline(
         # Load already-downloaded files from disk
         if cached_pairs:
             n_cached = len(cached_pairs)
-            tracker.update(0, message=f"Loading {n_cached} cached timeseries files from disk…")
+            tracker.start_phase(
+                f"Loading {n_cached:,} cached timeseries files from disk", total=n_cached
+            )
             cached_bldgs_by_upg: dict[int, list] = {}
             for bldg, upg in cached_pairs:
                 cached_bldgs_by_upg.setdefault(upg, []).append(bldg)
@@ -230,17 +229,21 @@ def _run_pipeline(
                         output_dir=ts_dir,
                     )
                 )
+                tracker.advance(len(bldgs), message=f"Loaded cached files for upgrade {upg}")
+            tracker.log(f"Loaded {n_cached:,} cached timeseries files from disk.")
 
         # Download only the missing files
         if missing_pairs:
             n_missing = len(missing_pairs)
-            tracker._total = n_missing
+            tracker.start_phase(
+                f"Downloading {n_missing:,} timeseries files from OEDI", total=n_missing
+            )
             missing_bldgs_by_upg: dict[int, list] = {}
             for bldg, upg in missing_pairs:
                 missing_bldgs_by_upg.setdefault(upg, []).append(bldg)
 
             def dl_progress(done, total, msg=""):
-                tracker.update(completed=1, message=msg)
+                tracker.advance(1, message=msg)
 
             for upg, bldgs in missing_bldgs_by_upg.items():
                 if tracker.is_cancelled():
@@ -254,8 +257,8 @@ def _run_pipeline(
                         cancel_event=tracker.cancel_event,
                     )
                 )
-        elif cached_pairs:
-            tracker.update(len(cached_pairs), message=f"Loaded {len(cached_pairs)} cached files.")
+            if not tracker.is_cancelled():
+                tracker.log(f"Downloaded {n_missing:,} timeseries files.")
 
         if tracker.is_cancelled():
             tracker.done(message="Download cancelled.")
@@ -275,11 +278,8 @@ def _run_pipeline(
             scenario_key = _scenario_key(upgrade_id)
             rate_config = resolved_rate_assignments.get(scenario_key)
             if rate_config is None:
-                tracker.update(0, message=f"No electricity rate assigned for {scenario_key}, skipping.")
+                tracker.log(f"No electricity rate assigned for {scenario_key}, skipping.")
                 continue
-
-            tracker.update(0, message=f"Calculating electricity bills for upgrade {upgrade_id}…")
-            tracker._total += len(building_ids)
 
             applicable_set = set(upgrade_applicable_ids.get(upgrade_id, building_ids))
             load_records = []
@@ -301,15 +301,20 @@ def _run_pipeline(
                 load_records.append((bldg_id, upgrade_id, values))
 
             if not load_records:
+                tracker.log(f"No load profiles available for upgrade {upgrade_id}, skipping.")
                 continue
 
+            tracker.start_phase(
+                f"Calculating electricity bills — upgrade {upgrade_id}",
+                total=len(load_records),
+            )
             try:
                 calc = UtilityBillCalculator()
                 result_df = calc.calculate_batch_bills(
                     load_records,
                     rate_config,
-                    progress_cb=lambda done, total: tracker.update(
-                        completed=1, message=f"Calculated {done}/{total}"
+                    progress_cb=lambda done, total: tracker.advance(
+                        1, message=f"Calculated {done:,}/{total:,} bills"
                     ),
                 )
                 # Tag each building with its applicability status for this upgrade
@@ -318,7 +323,7 @@ def _run_pipeline(
                 )
                 all_results.append(result_df)
             except Exception as exc:
-                tracker.update(0, message=f"Electricity billing error for upgrade {upgrade_id}: {exc}")
+                tracker.log(f"Electricity billing error for upgrade {upgrade_id}: {exc}")
 
         if not all_results:
             tracker.error("No electricity bill results were calculated.")
@@ -329,6 +334,9 @@ def _run_pipeline(
         # ── calculate fuel bills ──────────────────────────────────────────────
         fuel_frames: list[pl.DataFrame] = []
 
+        tracker.start_phase(
+            "Calculating fuel bills", total=len(app_state.selected_upgrades)
+        )
         for upgrade_id in app_state.selected_upgrades:
             scenario_key = _scenario_key(upgrade_id)
             fuel_rates_for_scenario = resolved_fuel_rate_assignments.get(scenario_key, {})
@@ -342,6 +350,7 @@ def _run_pipeline(
             )
             if fuel_df is not None:
                 fuel_frames.append(fuel_df)
+            tracker.advance(1)
 
         if fuel_frames:
             all_fuel = pl.concat(fuel_frames)
@@ -356,6 +365,7 @@ def _run_pipeline(
                 total_expr = total_expr + pl.col(fc).fill_null(0.0)
             combined = combined.with_columns(total_expr.alias("total_energy_bill"))
 
+        tracker.start_phase("Saving results")
         result_store["df"] = combined
         out_csv = app_state.project_dir / "results" / "bill_results.csv"
         out_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -364,6 +374,72 @@ def _run_pipeline(
 
     except Exception as exc:
         tracker.error(f"Pipeline failed: {exc}")
+
+
+def _fmt_duration(seconds: float) -> str:
+    seconds = int(seconds)
+    hours, rem = divmod(seconds, 3600)
+    minutes, secs = divmod(rem, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
+
+
+def _render_progress_panel() -> None:
+    """Render the live progress panel from the tracker snapshot.
+
+    Reads runtime state from st.session_state (not closures) so it stays
+    correct across fragment auto-reruns.
+    """
+    tracker: ProgressTracker | None = st.session_state.get("run_tracker")
+    thread: threading.Thread | None = st.session_state.get("run_thread")
+    if tracker is None:
+        return
+
+    snap = tracker.snapshot()
+    running = thread is not None and thread.is_alive()
+
+    # ── Status banner + cancel control ────────────────────────────────────────
+    if running:
+        if snap.cancel_requested:
+            st.warning("Cancelling — waiting for in-flight downloads to stop…")
+        else:
+            banner_col, cancel_col = st.columns([5, 1])
+            with banner_col:
+                st.info(f"Running — elapsed {_fmt_duration(snap.elapsed_seconds)}")
+            with cancel_col:
+                if st.button("⏹ Cancel", type="secondary", key="run_cancel_btn"):
+                    tracker.cancel()
+    elif snap.is_error:
+        st.error(snap.error_message)
+    elif snap.is_done:
+        st.success(f"{snap.message}  (total time {_fmt_duration(snap.elapsed_seconds)})")
+    elif snap.phases:
+        # Thread ended without done()/error() — should not happen, but surface it
+        st.error("The background run stopped unexpectedly. Check the activity log below.")
+
+    # ── Phase list ────────────────────────────────────────────────────────────
+    for phase in snap.phases:
+        if phase.done:
+            count = f" — {phase.completed:,}" if phase.completed else ""
+            if phase.total and phase.completed:
+                count = f" — {phase.completed:,}/{phase.total:,}"
+            st.markdown(f"✅ {phase.name}{count}")
+        else:
+            label = phase.name
+            if phase.total:
+                label += f" — {phase.completed:,}/{phase.total:,}"
+                eta = phase.eta_seconds
+                if eta is not None and eta > 1:
+                    label += f" · ~{_fmt_duration(eta)} remaining"
+                st.progress(phase.fraction or 0.0, text=f"▶ {label}")
+            else:
+                st.markdown(f"▶ {label} …")
+            if snap.message and snap.message != phase.name:
+                st.caption(snap.message)
+
+    # ── Activity log ──────────────────────────────────────────────────────────
+    if snap.log:
+        with st.expander("Activity log", expanded=False):
+            st.code("\n".join(snap.log), language=None)
 
 
 def render_run_page(app_state: AppState) -> None:
@@ -435,19 +511,14 @@ def render_run_page(app_state: AppState) -> None:
     st.divider()
 
     # ── Runtime state in session ─────────────────────────────────────────────
-    if "run_tracker" not in st.session_state:
-        st.session_state["run_tracker"] = None
-    if "run_thread" not in st.session_state:
-        st.session_state["run_thread"] = None
-    if "run_results" not in st.session_state:
-        st.session_state["run_results"] = {}
+    st.session_state.setdefault("run_tracker", None)
+    st.session_state.setdefault("run_thread", None)
+    st.session_state.setdefault("run_results", {})
 
-    tracker: ProgressTracker | None = st.session_state["run_tracker"]
     thread: threading.Thread | None = st.session_state["run_thread"]
     result_store: dict = st.session_state["run_results"]
 
     is_running = thread is not None and thread.is_alive()
-    is_done = tracker is not None and tracker.is_done()
 
     # ── API key pre-flight check ──────────────────────────────────────────────
     needs_urdb = _urdb_key_required(app_state.rate_assignments, app_state.rate_library)
@@ -461,11 +532,11 @@ def render_run_page(app_state: AppState) -> None:
             "sidebar before starting."
         )
 
-    # ── Action buttons ────────────────────────────────────────────────────────
+    # ── Start button ──────────────────────────────────────────────────────────
     start_blocked = assigned == 0 or (needs_urdb and not api_key_available)
     if not is_running:
         if st.button("▶ Start Download & Calculate", type="primary", disabled=start_blocked):
-            new_tracker = ProgressTracker(total=1)
+            new_tracker = ProgressTracker()
             new_results: dict = {}
             # Resolve rate names → full dicts before handing off to background thread
             _rate_lib = app_state.rate_library
@@ -494,34 +565,32 @@ def render_run_page(app_state: AppState) -> None:
                 _save_project(app_state)
             new_thread.start()
             st.rerun()
-    else:
-        if st.button("⏹ Cancel", type="secondary"):
-            tracker.cancel()
 
     # ── Live progress display ─────────────────────────────────────────────────
-    if tracker is not None:
-        updates = tracker.drain()
-        latest = updates[-1] if updates else None
+    # The panel runs as an auto-refreshing fragment: while the pipeline is
+    # running, only this panel re-renders (every second) instead of the whole
+    # app, which keeps the page responsive during downloads/calculations.
+    if is_running:
+        st.session_state["_run_finish_pending"] = True
 
-        frac = min(tracker.completed / max(tracker.total, 1), 1.0)
-        st.progress(frac)
+    @st.fragment(run_every=1.0 if is_running else None)
+    def _progress_fragment() -> None:
+        t = st.session_state.get("run_thread")
+        still_running = t is not None and t.is_alive()
+        _render_progress_panel()
+        # One full-app refresh when the run transitions to finished, so the
+        # results section renders and the fragment stops polling.
+        if not still_running and st.session_state.get("_run_finish_pending"):
+            st.session_state["_run_finish_pending"] = False
+            st.rerun(scope="app")
 
-        if latest:
-            if latest.is_error:
-                st.error(latest.error_message)
-            elif latest.is_done:
-                st.success(latest.message)
-            else:
-                st.info(f"{latest.message} ({latest.completed}/{latest.total})")
-
-        if is_running:
-            time.sleep(0.5)
-            st.rerun()
+    _progress_fragment()
 
     # ── Results available ─────────────────────────────────────────────────────
-    if "df" in result_store and result_store["df"] is not None:
+    if not is_running and result_store.get("df") is not None:
         app_state.results_available = True
         df = result_store["df"]
+        st.divider()
         st.success(f"Calculation complete — {len(df):,} building-scenario results.")
         st.dataframe(df.head(20).to_pandas(), width='stretch')
         st.info("Go to the **Results** tab for full visualization and export.")
