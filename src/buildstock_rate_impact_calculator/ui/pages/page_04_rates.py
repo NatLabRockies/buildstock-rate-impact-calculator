@@ -279,7 +279,9 @@ def render_rates_page(app_state: AppState) -> None:
                     st.json({
                         k: v for k, v in rate_dict.items()
                         if k in ("name", "utility", "sector", "fixedchargefirstmeter",
-                                 "energyratestructure")
+                                 "fixedchargeunits", "energyratestructure",
+                                 "demandratestructure", "flatdemandstructure",
+                                 "flatdemandmonths")
                     })
             with col2:
                 if st.button("🗑 Remove", key=f"remove_rate_{rate_name}"):

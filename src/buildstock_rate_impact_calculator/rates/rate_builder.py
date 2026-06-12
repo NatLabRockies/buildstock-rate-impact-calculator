@@ -246,11 +246,16 @@ class UrdbRateBuilder:
             
             # Demand rate structure - will be populated if enabled
             "demandratestructure": [],      # List of periods, each containing tiers
-            "demandweekdayschedule": None,  # 12x24 matrix  
+            "demandweekdayschedule": None,  # 12x24 matrix
             "demandweekendschedule": None,  # 12x24 matrix
             "demandrateunit": DemandUnit.KW.value,
             "demandwindow": 15.0,          # Demand window in minutes
             "demandreactivepowercharge": 0.0,  # Reactive power charge $/kVAR
+
+            # Flat (monthly/seasonal) demand structure (URDB v8 format)
+            "flatdemandstructure": [],      # List of periods, each containing tiers
+            "flatdemandmonths": [],         # 12 period indices (Jan-Dec), 0-based
+            "flatdemandunit": DemandUnit.KW.value,
             
             # Look-back demand billing (URDB v8 format with correct camelCase)
             "lookbackMonths": [False] * 12,        # Array of 12 booleans (CORRECTED)
@@ -458,23 +463,47 @@ class UrdbRateBuilder:
     # FIXED AND MINIMUM CHARGES
     # ==========================================================================
     
-    def monthly_fixed_charge(self, amount: float, additional_meter_charge: float = 0.0) -> 'UrdbRateBuilder':
+    def fixed_charge(self, amount: float,
+                     units: Union[FixedChargeUnits, str] = FixedChargeUnits.MONTHLY,
+                     additional_meter_charge: float = 0.0) -> 'UrdbRateBuilder':
         """
-        Set monthly fixed charges.
-        
+        Set the fixed meter charge with explicit units.
+
+        PySAM's URDBv8_to_ElectricityRates converts "$/day" (x365/12) and
+        "$/year" (/12) to the monthly charge it requires internally.
+
         Args:
-            amount: Fixed charge for first meter in dollars per month
+            amount: Fixed charge for the first meter
+            units: Units for the fixed charge ($/day, $/month, $/year)
             additional_meter_charge: Fixed charge for each additional meter
-            
+
         Returns:
             Self for method chaining
         """
+        if isinstance(units, str):
+            units = FixedChargeUnits(units)
+
         self._rate_data["fixedchargefirstmeter"] = float(amount)
         self._rate_data["fixedchargeeaaddl"] = float(additional_meter_charge)
-        self._rate_data["fixedchargeunits"] = FixedChargeUnits.MONTHLY.value
-        
-        self.logger.debug(f"Set monthly fixed charge: ${amount:.2f}, additional: ${additional_meter_charge:.2f}")
+        self._rate_data["fixedchargeunits"] = units.value
+
+        self.logger.debug(
+            f"Set fixed charge: ${amount:.2f} {units.value}, additional: ${additional_meter_charge:.2f}"
+        )
         return self
+
+    def monthly_fixed_charge(self, amount: float, additional_meter_charge: float = 0.0) -> 'UrdbRateBuilder':
+        """
+        Set monthly fixed charges.
+
+        Args:
+            amount: Fixed charge for first meter in dollars per month
+            additional_meter_charge: Fixed charge for each additional meter
+
+        Returns:
+            Self for method chaining
+        """
+        return self.fixed_charge(amount, FixedChargeUnits.MONTHLY, additional_meter_charge)
     
     def minimum_charge(self, amount: float, units: MinChargeUnits = MinChargeUnits.MONTHLY) -> 'UrdbRateBuilder':
         """
@@ -739,10 +768,10 @@ class UrdbRateBuilder:
         self._rate_data["_demand_enabled"] = True
         self._rate_data["demandrateunit"] = demand_unit.value
         self._rate_data["demandwindow"] = float(demand_window)
-        
-        # Initialize demand rate structure to match energy periods
-        num_energy_periods = len(self._rate_data["energyratestructure"])
-        self._rate_data["demandratestructure"] = [[] for _ in range(num_energy_periods)]
+
+        # Demand TOU periods are independent of energy TOU periods;
+        # add_demand_tier() extends this structure as needed.
+        self._rate_data["demandratestructure"] = []
         
         # Initialize demand schedules separately (don't copy energy schedules by default)
         # This addresses the issue where demand and energy TOU periods may differ
@@ -864,7 +893,72 @@ class UrdbRateBuilder:
         self.logger.info("Set separate demand TOU schedules")
         return self
     
-    def set_demand_lookback(self, months: Optional[List[int]] = None, percent: float = 100.0, 
+    def add_flat_demand_tier(self, period: int, max_demand: Optional[float],
+                             rate: float, adj: float = 0.0) -> 'UrdbRateBuilder':
+        """
+        Add a tier to the flat (monthly/seasonal) demand structure.
+
+        Flat demand charges apply to the monthly peak demand regardless of
+        when it occurs. Use set_flat_demand_months() to assign a flat demand
+        period to each calendar month. PySAM converts these fields
+        (flatdemandstructure / flatdemandmonths) into ur_dc_flat_mat.
+
+        Args:
+            period: Flat demand period index (0-based)
+            max_demand: Cumulative maximum demand for this tier (None for unlimited)
+            rate: Demand rate in $/demand_unit
+            adj: Rate adjustment in $/demand_unit
+
+        Returns:
+            Self for method chaining
+
+        Raises:
+            ValueError: If period is negative
+        """
+        if period < 0:
+            raise ValueError("Period index must be non-negative")
+
+        while len(self._rate_data["flatdemandstructure"]) <= period:
+            self._rate_data["flatdemandstructure"].append([])
+
+        tier = {
+            "rate": float(rate),
+            "adj": float(adj)
+        }
+        if max_demand is not None:
+            tier["max"] = float(max_demand)
+
+        self._rate_data["flatdemandstructure"][period].append(tier)
+
+        self.logger.debug(f"Added flat demand tier: period {period}, rate ${rate:.2f}")
+        return self
+
+    def set_flat_demand_months(self, months: List[int]) -> 'UrdbRateBuilder':
+        """
+        Assign a flat demand period to each calendar month.
+
+        Args:
+            months: List of exactly 12 flat-demand period indices (0-based),
+                    one per month January through December.
+
+        Returns:
+            Self for method chaining
+
+        Raises:
+            ValueError: If not exactly 12 non-negative integer indices
+        """
+        if len(months) != 12:
+            raise ValueError(f"Must provide exactly 12 monthly period indices, got {len(months)}")
+        for p in months:
+            if not isinstance(p, int) or p < 0:
+                raise ValueError(f"Invalid flat demand period index: {p}. Must be a non-negative integer")
+
+        self._rate_data["flatdemandmonths"] = [int(p) for p in months]
+
+        self.logger.debug(f"Set flat demand months: {months}")
+        return self
+
+    def set_demand_lookback(self, months: Optional[List[int]] = None, percent: float = 100.0,
                            range_months: int = 0) -> 'UrdbRateBuilder':
         """
         Configure demand charge look-back billing (URDB v8 format).
@@ -1164,6 +1258,18 @@ class UrdbRateBuilder:
             if demand_weekend and (len(demand_weekend) != 12 or not all(len(month) == 24 for month in demand_weekend)):
                 errors.append("Demand weekend schedule must be 12x24 matrix")
         
+        # Flat (monthly) demand validation
+        flat_struct = self._rate_data.get("flatdemandstructure") or []
+        flat_months = self._rate_data.get("flatdemandmonths") or []
+        if any(flat_struct) or flat_months:
+            if len(flat_months) != 12:
+                errors.append("flatdemandmonths must contain exactly 12 period indices when flat demand is defined")
+            else:
+                for period in set(flat_months):
+                    if (not isinstance(period, int) or period < 0
+                            or period >= len(flat_struct) or not flat_struct[period]):
+                        errors.append(f"flatdemandmonths references period {period} which has no flat demand tiers")
+
         # Validate lookback configuration
         lookback_months = self._rate_data.get("lookbackMonths", [])
         lookback_range = self._rate_data.get("lookbackRange", 0)
@@ -1233,6 +1339,13 @@ class UrdbRateBuilder:
             if "lookbackPercent" not in rate_structure:
                 rate_structure["lookbackPercent"] = 0.0
         
+        # Remove flat (monthly) demand fields if unused — PySAM enables demand
+        # charges whenever flatdemandmonths is present, so empty defaults must go
+        flat_struct = rate_structure.get("flatdemandstructure") or []
+        if not any(flat_struct) or not rate_structure.get("flatdemandmonths"):
+            for field in ("flatdemandstructure", "flatdemandmonths", "flatdemandunit"):
+                rate_structure.pop(field, None)
+
         # Remove empty seasonal definitions
         if not rate_structure.get("seasonaldefinitions"):
             rate_structure.pop("seasonaldefinitions", None)
