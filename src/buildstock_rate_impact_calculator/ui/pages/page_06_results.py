@@ -3,9 +3,10 @@ Page 6: Results Visualization & Export
 
 Displays:
   - Summary table: mean/median/total bill per scenario (with optional grouping)
+  - Bill Summary view toggle: total-bill table vs by-fuel stacked bar
   - Grouped bar chart: mean annual bill by scenario and group
   - Box-plot distribution: bill spread per scenario
-  - Bill difference vs baseline table and chart
+  - Bill Savings vs baseline (Average / Total toggle)
   - Download CSV button (st.download_button)
   - Save to output directory button
 """
@@ -92,18 +93,30 @@ def render_results_page(app_state: AppState) -> None:
     from buildstock_rate_impact_calculator.ui.components.charts import (
         render_bill_comparison_bar,
         render_bill_distribution,
+        render_bill_stack_bar,
+        melt_fuels_to_long,
     )
 
     # Dataset type drives which aggregation columns the summary frame
     # carries (ResStock: mean/median/total_annual_bill + units; ComStock:
-    # mean/median_per_sqft + total_annual_bill + total_sqft + units). The
-    # full UI rework lands in phase 6 — phase 5 only adapts call sites.
+    # mean/median_per_sqft + total_annual_bill + total_sqft + units).
     ds_type = (app_state.dataset_type or "").lower()
+    is_comstock = ds_type == "comstock"
+
+    # Whole-building dollars use $.0f; ComStock $/ft² uses $.2f.
+    dollar_fmt = "$.0f"
+    per_sqft_fmt = "$.2f"
 
     st.divider()
 
     # ── Summary table ─────────────────────────────────────────────────────────
     st.subheader("Bill Summary")
+    bill_summary_view = st.radio(
+        "Bill Summary view",
+        ["Total bill", "By fuel"],
+        horizontal=True,
+        key="bill_summary_view",
+    )
     summary = None
     try:
         summary = summarize_bills(df, dataset_type=ds_type, group_by=group_col)
@@ -116,40 +129,87 @@ def render_results_page(app_state: AppState) -> None:
             )
             .alias("scenario")
         )
-        display_cols = ["scenario", "upgrade"]
-        if group_col:
-            display_cols = [group_col] + display_cols
-        if ds_type == "comstock":
-            display_cols += [
-                "mean_per_sqft",
-                "median_per_sqft",
-                "total_annual_bill",
-                "total_sqft",
-                "units",
-            ]
+
+        if bill_summary_view == "Total bill":
+            display_cols = ["scenario", "upgrade"]
+            if group_col:
+                display_cols = [group_col] + display_cols
+            if is_comstock:
+                display_cols += [
+                    "mean_per_sqft",
+                    "median_per_sqft",
+                    "total_annual_bill",
+                    "total_sqft",
+                    "units",
+                ]
+            else:
+                display_cols += [
+                    "mean_annual_bill",
+                    "median_annual_bill",
+                    "total_annual_bill",
+                    "units",
+                ]
+            # Include fuel/total bill summaries if present
+            for extra in (
+                "mean_natural_gas_bill",
+                "mean_propane_bill",
+                "mean_fuel_oil_bill",
+                "mean_total_energy_bill",
+                "total_total_energy_bill",
+            ):
+                if extra in summary.columns:
+                    display_cols.append(extra)
+            display_cols = [c for c in display_cols if c in summary.columns]
+
+            # Per-column number format: $/ft² gets 2 decimals; everything else
+            # in whole-building dollars gets no decimals.
+            per_sqft_cols = {"mean_per_sqft", "median_per_sqft"}
+            non_dollar_cols = {"scenario", "upgrade", "units", "total_sqft"}
+            if group_col:
+                non_dollar_cols.add(group_col)
+            column_config: dict[str, st.column_config.Column] = {}
+            for col in display_cols:
+                if col in per_sqft_cols:
+                    column_config[col] = st.column_config.NumberColumn(
+                        format=per_sqft_fmt
+                    )
+                elif col in non_dollar_cols:
+                    continue
+                else:
+                    column_config[col] = st.column_config.NumberColumn(
+                        format=dollar_fmt
+                    )
+            st.dataframe(
+                summary.select(display_cols).to_pandas(),
+                width="stretch",
+                hide_index=True,
+                column_config=column_config,
+            )
         else:
-            display_cols += [
-                "mean_annual_bill",
-                "median_annual_bill",
-                "total_annual_bill",
-                "units",
-            ]
-        # Include fuel/total bill summaries if present
-        for extra in (
-            "mean_natural_gas_bill",
-            "mean_propane_bill",
-            "mean_fuel_oil_bill",
-            "mean_total_energy_bill",
-            "total_total_energy_bill",
-        ):
-            if extra in summary.columns:
-                display_cols.append(extra)
-        display_cols = [c for c in display_cols if c in summary.columns]
-        st.dataframe(
-            summary.select(display_cols).to_pandas(),
-            width="stretch",
-            hide_index=True,
-        )
+            # "By fuel": stacked bar of mean per-fuel bills by scenario.
+            fuel_label_map = {
+                "mean_annual_bill": "Electricity",
+                "mean_natural_gas_bill": "Natural Gas",
+                "mean_propane_bill": "Propane",
+                "mean_fuel_oil_bill": "Fuel Oil",
+            }
+            long_summary = melt_fuels_to_long(summary, fuel_label_map)
+            if long_summary.height == 0:
+                st.info(
+                    "No per-fuel bill columns available — switch to "
+                    "'Total bill' for the summary table."
+                )
+            else:
+                stack_chart = render_bill_stack_bar(
+                    long_summary,
+                    value_col="value",
+                    group_col=group_col,
+                    scenario_col="scenario",
+                    fuel_col="fuel_type",
+                    value_format=dollar_fmt,
+                    chart_title="Mean Annual Bill by Fuel",
+                )
+                st.altair_chart(stack_chart, width="stretch")
     except Exception as exc:
         st.error(f"Failed to summarize bills: {exc}")
 
@@ -206,9 +266,13 @@ def render_results_page(app_state: AppState) -> None:
     if summary is not None:
         try:
             # ComStock means are reported on $/ft², ResStock on whole-building $.
-            bill_col = "mean_per_sqft" if ds_type == "comstock" else "mean_annual_bill"
+            bill_col = "mean_per_sqft" if is_comstock else "mean_annual_bill"
+            chart_fmt = per_sqft_fmt if is_comstock else dollar_fmt
             chart = render_bill_comparison_bar(
-                summary, group_col=group_col, bill_col=bill_col
+                summary,
+                group_col=group_col,
+                bill_col=bill_col,
+                value_format=chart_fmt,
             )
             st.altair_chart(chart, width="stretch")
         except Exception as exc:
@@ -226,58 +290,142 @@ def render_results_page(app_state: AppState) -> None:
 
     st.divider()
 
-    # ── Bill difference vs baseline ───────────────────────────────────────────
+    # ── Bill savings vs baseline ──────────────────────────────────────────────
     upgrades = sorted(df["upgrade"].unique().to_list())
     if len(upgrades) > 1 and 0 in upgrades:
-        st.subheader("Bill Difference vs Baseline")
+        st.subheader("Bill Savings")
+        savings_view = st.radio(
+            "Show",
+            ["Average", "Total"],
+            horizontal=True,
+            key="bill_savings_view",
+        )
         try:
             diff_df = compute_bill_savings(df, baseline_upgrade=0)
-            diff_summary = (
-                diff_df.group_by(
-                    ["upgrade", "scenario"]
-                    if "scenario" in diff_df.columns
-                    else ["upgrade"]
-                )
-                .agg(
-                    [
-                        pl.col("bill_savings").mean().alias("mean_bill_savings"),
-                        pl.col("bill_savings").median().alias("median_bill_savings"),
-                        pl.col("bldg_id").count().alias("count"),
-                    ]
-                )
-                .sort("upgrade")
+            grp_keys = (
+                ["upgrade", "scenario"]
+                if "scenario" in diff_df.columns
+                else ["upgrade"]
             )
-            st.dataframe(diff_summary.to_pandas(), width="stretch", hide_index=True)
 
-            # Diff bar chart
+            # Pick the right savings column based on dataset + view.
+            #   ResStock: bill_savings (whole-building $)
+            #   ComStock: bill_savings_per_sqft when displaying $/ft²; otherwise
+            #            bill_savings (whole-building $) for totals.
+            use_per_sqft = (
+                is_comstock
+                and savings_view == "Average"
+                and "bill_savings_per_sqft" in diff_df.columns
+            )
+            savings_col = "bill_savings_per_sqft" if use_per_sqft else "bill_savings"
+            display_fmt = per_sqft_fmt if use_per_sqft else dollar_fmt
+
+            if savings_view == "Average":
+                value_label = (
+                    "mean_bill_savings_per_sqft"
+                    if use_per_sqft
+                    else "mean_bill_savings"
+                )
+                diff_summary = (
+                    diff_df.group_by(grp_keys)
+                    .agg(
+                        [
+                            pl.col(savings_col).mean().alias(value_label),
+                            pl.col(savings_col)
+                            .median()
+                            .alias(
+                                "median_bill_savings_per_sqft"
+                                if use_per_sqft
+                                else "median_bill_savings"
+                            ),
+                            pl.col("bldg_id").count().alias("count"),
+                        ]
+                    )
+                    .sort("upgrade")
+                )
+            else:
+                # Total view: weighted total annual savings (sum across
+                # buildings). ComStock annual_bill is already weighted, so a
+                # direct sum is the dataset total; ResStock requires the
+                # row weight (already baked into bill_savings? No — savings
+                # is baseline-upgrade in per-building dollars for ResStock).
+                if not is_comstock and "weight" in diff_df.columns:
+                    total_expr = (
+                        (pl.col(savings_col) * pl.col("weight"))
+                        .sum()
+                        .alias("total_bill_savings")
+                    )
+                else:
+                    total_expr = pl.col(savings_col).sum().alias("total_bill_savings")
+                value_label = "total_bill_savings"
+                diff_summary = (
+                    diff_df.group_by(grp_keys)
+                    .agg([total_expr, pl.col("bldg_id").count().alias("count")])
+                    .sort("upgrade")
+                )
+
+            # Render with $ formatting on the savings column.
+            sav_column_config: dict[str, st.column_config.Column] = {
+                value_label: st.column_config.NumberColumn(format=display_fmt),
+            }
+            if savings_view == "Average":
+                med_label = (
+                    "median_bill_savings_per_sqft"
+                    if use_per_sqft
+                    else "median_bill_savings"
+                )
+                sav_column_config[med_label] = st.column_config.NumberColumn(
+                    format=display_fmt
+                )
+            st.dataframe(
+                diff_summary.to_pandas(),
+                width="stretch",
+                hide_index=True,
+                column_config=sav_column_config,
+            )
+
+            # Savings bar chart
             diff_pandas = diff_summary.to_pandas()
             diff_pandas["upgrade"] = diff_pandas["upgrade"].astype(str)
             import altair as alt
 
+            y_title = (
+                "Mean Bill Savings ($/ft²)"
+                if use_per_sqft
+                else (
+                    "Total Bill Savings ($)"
+                    if savings_view == "Total"
+                    else "Mean Bill Savings ($)"
+                )
+            )
             diff_chart = (
                 alt.Chart(diff_pandas)
                 .mark_bar()
                 .encode(
                     x=alt.X("upgrade:N", title="Upgrade Scenario"),
-                    y=alt.Y("mean_bill_savings:Q", title="Mean Bill Savings ($)"),
-                    # Positive bill_savings = baseline > upgrade = savings (green).
+                    y=alt.Y(
+                        f"{value_label}:Q",
+                        title=y_title,
+                        axis=alt.Axis(format=display_fmt),
+                    ),
+                    # Positive savings (baseline > upgrade) → green.
                     color=alt.condition(
-                        alt.datum.mean_bill_savings > 0,
-                        alt.value("#4CAF50"),  # green for savings
-                        alt.value("#F44336"),  # red for increases
+                        alt.datum[value_label] > 0,
+                        alt.value("#4CAF50"),
+                        alt.value("#F44336"),
                     ),
                     tooltip=[
                         alt.Tooltip("upgrade:N", title="Upgrade"),
                         alt.Tooltip(
-                            "mean_bill_savings:Q",
-                            title="Mean Savings ($)",
-                            format="$.2f",
+                            f"{value_label}:Q",
+                            title=y_title,
+                            format=display_fmt,
                         ),
                         alt.Tooltip("count:Q", title="Buildings"),
                     ],
                 )
                 .properties(
-                    title="Mean Annual Bill Change vs Baseline",
+                    title="Annual Bill Savings vs Baseline",
                     width=500,
                     height=300,
                 )
@@ -285,7 +433,7 @@ def render_results_page(app_state: AppState) -> None:
             )
             st.altair_chart(diff_chart, width="stretch")
         except Exception as exc:
-            st.error(f"Bill difference error: {exc}")
+            st.error(f"Bill savings error: {exc}")
     # ── Upgrade vs Baseline Comparison ────────────────────────────────────────
     if "applicable" in df.columns and len(upgrades) > 1 and 0 in upgrades:
         st.divider()
