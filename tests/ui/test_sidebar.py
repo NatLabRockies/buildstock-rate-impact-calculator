@@ -1,9 +1,8 @@
 """
 Tests for sidebar helper functions in sidebar_helpers.py.
 """
+
 from __future__ import annotations
-from pathlib import Path
-import pytest
 
 from buildstock_rate_impact_calculator.ui.sidebar_helpers import (
     list_projects,
@@ -12,6 +11,7 @@ from buildstock_rate_impact_calculator.ui.sidebar_helpers import (
 
 
 # ── list_projects ─────────────────────────────────────────────────────────────
+
 
 def test_list_projects_empty_dir(tmp_path):
     """No projects/ subdir → empty list."""
@@ -40,6 +40,7 @@ def test_list_projects_ignores_files(tmp_path):
 
 
 # ── default_project_name ──────────────────────────────────────────────────────
+
 
 def test_default_project_name_empty_dir(tmp_path):
     """No projects/ dir → 'Project 1'."""

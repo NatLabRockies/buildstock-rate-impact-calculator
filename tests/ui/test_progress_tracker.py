@@ -1,6 +1,7 @@
 """
 Tests for the phase-aware ProgressTracker used by the Run page.
 """
+
 from __future__ import annotations
 
 import threading
@@ -71,8 +72,8 @@ def test_error_sets_error_state_and_log():
 def test_legacy_update_maps_to_advance_and_log():
     tracker = ProgressTracker()
     tracker.start_phase("Working", total=2)
-    tracker.update(1, message="one done")          # advance
-    tracker.update(0, message="milestone note")    # log
+    tracker.update(1, message="one done")  # advance
+    tracker.update(0, message="milestone note")  # log
     snap = tracker.snapshot()
     assert snap.current_phase.completed == 1
     assert any("milestone note" in line for line in snap.log)

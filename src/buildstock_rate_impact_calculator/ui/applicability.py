@@ -11,6 +11,7 @@ filters. Those per-upgrade applicable-id sets are cached separately
 (get_applicable_id_sets) so changing a filter updates the summary instantly
 without re-reading upgrade metadata from OEDI.
 """
+
 from __future__ import annotations
 import hashlib
 import json
@@ -160,7 +161,8 @@ def load_applicability_summary(
         geo_ids = metadata[bldg_col].unique().to_list()
 
         filters = {
-            k: v for k, v in (app_state.active_filters or {}).items()
+            k: v
+            for k, v in (app_state.active_filters or {}).items()
             if k in metadata.columns
         }
         filtered = mgr.filter_metadata(metadata, filters) if filters else metadata
@@ -177,12 +179,14 @@ def load_applicability_summary(
                 n_applicable = n_total
             else:
                 n_applicable = len(filtered_ids & sets.get(upgrade_id, filtered_ids))
-            rows.append({
-                "upgrade_id": upgrade_id,
-                "n_applicable": n_applicable,
-                "n_total": n_total,
-                "est_bytes": n_applicable * BYTES_PER_BUILDING,
-            })
+            rows.append(
+                {
+                    "upgrade_id": upgrade_id,
+                    "n_applicable": n_applicable,
+                    "n_total": n_total,
+                    "est_bytes": n_applicable * BYTES_PER_BUILDING,
+                }
+            )
         return {"rows": rows, "total_buildings": n_total}
     except Exception as exc:  # pragma: no cover — surfaced in UI
         return {"error": str(exc)}
@@ -216,7 +220,9 @@ def render_applicability_table(
         get_session_metadata,
     )
 
-    if not (app_state.dataset_type and app_state.release and app_state.selected_upgrades):
+    if not (
+        app_state.dataset_type and app_state.release and app_state.selected_upgrades
+    ):
         return
 
     sum_key = compute_summary_cache_key(app_state)
@@ -275,11 +281,13 @@ def render_applicability_table(
             label = f"Upgrade {uid}"
         scenario_label = label if uid == 0 else f"Upgrade {uid}: {label}"
         pct = row["n_applicable"] / row["n_total"] * 100 if row["n_total"] > 0 else 0.0
-        tbl_rows.append({
-            "Scenario": scenario_label,
-            "Applicable": f"{row['n_applicable']:,} / {row['n_total']:,} ({pct:.0f}%)",
-            "Est. Download": format_bytes(row["est_bytes"]),
-        })
+        tbl_rows.append(
+            {
+                "Scenario": scenario_label,
+                "Applicable": f"{row['n_applicable']:,} / {row['n_total']:,} ({pct:.0f}%)",
+                "Est. Download": format_bytes(row["est_bytes"]),
+            }
+        )
 
     if tbl_rows:
         st.dataframe(

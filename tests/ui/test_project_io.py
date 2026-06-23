@@ -4,9 +4,7 @@ Phase 2 tests for project_io module: rate file I/O.
 
 from __future__ import annotations
 import json
-from pathlib import Path
 
-import pytest
 
 from buildstock_rate_impact_calculator.ui.project_io import (
     rate_to_filename,

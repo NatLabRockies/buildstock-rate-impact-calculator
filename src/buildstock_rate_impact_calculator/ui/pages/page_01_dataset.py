@@ -6,9 +6,12 @@ Lets the user choose:
 - Dataset version / release
 - Baseline and upgrade scenarios (multi-select with descriptive labels)
 """
+
 from __future__ import annotations
 import streamlit as st
-from buildstock_rate_impact_calculator.data.buildstock_manager import BuildStockDataManager
+from buildstock_rate_impact_calculator.data.buildstock_manager import (
+    BuildStockDataManager,
+)
 from buildstock_rate_impact_calculator.data.upgrade_labels import fetch_upgrade_labels
 from buildstock_rate_impact_calculator.ui.state import AppState
 
@@ -98,7 +101,9 @@ def render_dataset_page(app_state: AppState) -> None:
     # Pre-select currently stored upgrades only for the currently applied dataset.
     current_selected_labels = [
         f"{u} - {_labels.get(u, f'Upgrade {u}')}"
-        for u in ((app_state.selected_upgrades or []) if applied_key == selected_key else [])
+        for u in (
+            (app_state.selected_upgrades or []) if applied_key == selected_key else []
+        )
         if u in upgrade_ids
     ]
 
@@ -129,7 +134,9 @@ def render_dataset_page(app_state: AppState) -> None:
     col1, col2 = st.columns(2)
     with col1:
         current_dataset = (
-            _DATASET_DISPLAY_NAMES.get(f"{app_state.dataset_type}_{app_state.release}", "Not Applied")
+            _DATASET_DISPLAY_NAMES.get(
+                f"{app_state.dataset_type}_{app_state.release}", "Not Applied"
+            )
             if app_state.dataset_type and app_state.release
             else "Not Applied"
         )
@@ -141,6 +148,8 @@ def render_dataset_page(app_state: AppState) -> None:
         st.success(
             f"Selected: {', '.join(str(u) + ' - ' + _labels.get(u, f'Upgrade {u}') for u in selected_ids)}"
         )
-        st.caption("Selections auto-apply when dataset and one or more scenarios are set.")
+        st.caption(
+            "Selections auto-apply when dataset and one or more scenarios are set."
+        )
     else:
         st.info("Select one or more Upgrade Scenarios to apply this dataset.")

@@ -8,6 +8,7 @@ Run them with::
 
 They require a working internet connection and will hit the OEDI S3 bucket.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -16,6 +17,7 @@ import pytest
 # ---------------------------------------------------------------------------
 # CLI option
 # ---------------------------------------------------------------------------
+
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
@@ -30,6 +32,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 # Auto-skip integration tests unless --integration is passed
 # ---------------------------------------------------------------------------
 
+
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
@@ -43,6 +46,7 @@ def pytest_collection_modifyitems(
 # ---------------------------------------------------------------------------
 # Marker documentation
 # ---------------------------------------------------------------------------
+
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(

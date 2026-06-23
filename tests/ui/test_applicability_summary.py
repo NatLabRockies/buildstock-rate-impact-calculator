@@ -2,6 +2,7 @@
 Tests for the applicability summary helpers: filter-independent caching of
 per-upgrade applicable-id sets and summary computation with building filters.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -30,7 +31,9 @@ class FakeManager:
 
     def filter_metadata(self, df: pl.DataFrame, filters: dict) -> pl.DataFrame:
         for col, vals in filters.items():
-            df = df.filter(pl.col(col).is_in(vals if isinstance(vals, list) else [vals]))
+            df = df.filter(
+                pl.col(col).is_in(vals if isinstance(vals, list) else [vals])
+            )
         return df
 
     def get_upgrade_applicability(self, upgrade_id: int, building_ids: list) -> dict:
@@ -48,11 +51,18 @@ def _app_state() -> AppState:
 
 
 def _metadata() -> pl.DataFrame:
-    return pl.DataFrame({
-        "bldg_id": [1, 2, 3, 4],
-        "in.state": ["CO"] * 4,
-        "in.heating_fuel": ["NaturalGas", "NaturalGas", "Electricity", "Electricity"],
-    })
+    return pl.DataFrame(
+        {
+            "bldg_id": [1, 2, 3, 4],
+            "in.state": ["CO"] * 4,
+            "in.heating_fuel": [
+                "NaturalGas",
+                "NaturalGas",
+                "Electricity",
+                "Electricity",
+            ],
+        }
+    )
 
 
 def test_summary_without_filters():

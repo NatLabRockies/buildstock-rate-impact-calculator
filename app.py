@@ -1,6 +1,7 @@
 """
 BuildStock Rate Impact Calculator — Streamlit App Entry Point
 """
+
 import streamlit as st
 from pathlib import Path
 
@@ -11,7 +12,9 @@ from buildstock_rate_impact_calculator.ui.sidebar_helpers import (
     default_project_name,
     browse_folder,
 )
-from buildstock_rate_impact_calculator.ui.project_io import load_project as _load_project
+from buildstock_rate_impact_calculator.ui.project_io import (
+    load_project as _load_project,
+)
 
 # Configure the single package-level logger for the entire app session
 setup_logging()
@@ -62,7 +65,9 @@ def _do_load_project(project_dir: Path, state) -> None:
     try:
         missing = _load_project(project_dir, state, api_key=state.urdb_api_key)
         if missing:
-            st.warning(f"Loaded project — {len(missing)} rate(s) could not be restored: {', '.join(missing)}")
+            st.warning(
+                f"Loaded project — {len(missing)} rate(s) could not be restored: {', '.join(missing)}"
+            )
         else:
             st.success(f"Project loaded: {project_dir.name}")
         st.rerun()
@@ -79,7 +84,9 @@ with st.sidebar:
 
     # ── Data Directory ────────────────────────────────────────────────────────
     st.subheader("Data Directory")
-    st.caption("Location where all BuildStock data and project information will be stored.")
+    st.caption(
+        "Location where all BuildStock data and project information will be stored."
+    )
     col_dir, col_browse = st.columns([4, 1])
     with col_dir:
         output_dir_str = st.text_input(
@@ -152,7 +159,9 @@ with st.sidebar:
     )
     if st.button("Load", key="load_from_dropdown"):
         if selected_project:
-            _do_load_project(app_state.output_dir / "projects" / selected_project, app_state)
+            _do_load_project(
+                app_state.output_dir / "projects" / selected_project, app_state
+            )
 
     st.caption("— or load from path —")
     load_path_str = st.text_input(
@@ -176,31 +185,53 @@ st.markdown(
     "rate impacts for ResStock or ComStock buildings."
 )
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "1 · Dataset", "2 · Geography", "3 · Building Filters",
-    "4 · Energy Rates", "5 · Run", "6 · Results"
-])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+    [
+        "1 · Dataset",
+        "2 · Geography",
+        "3 · Building Filters",
+        "4 · Energy Rates",
+        "5 · Run",
+        "6 · Results",
+    ]
+)
 
 with tab1:
-    from buildstock_rate_impact_calculator.ui.pages.page_01_dataset import render_dataset_page
+    from buildstock_rate_impact_calculator.ui.pages.page_01_dataset import (
+        render_dataset_page,
+    )
+
     render_dataset_page(app_state)
 
 with tab2:
-    from buildstock_rate_impact_calculator.ui.pages.page_03_geography import render_geography_page
+    from buildstock_rate_impact_calculator.ui.pages.page_03_geography import (
+        render_geography_page,
+    )
+
     render_geography_page(app_state)
 
 with tab3:
-    from buildstock_rate_impact_calculator.ui.pages.page_02_building_filter import render_building_filter_page
+    from buildstock_rate_impact_calculator.ui.pages.page_02_building_filter import (
+        render_building_filter_page,
+    )
+
     render_building_filter_page(app_state)
 
 with tab4:
-    from buildstock_rate_impact_calculator.ui.pages.page_04_rates import render_rates_page
+    from buildstock_rate_impact_calculator.ui.pages.page_04_rates import (
+        render_rates_page,
+    )
+
     render_rates_page(app_state)
 
 with tab5:
     from buildstock_rate_impact_calculator.ui.pages.page_05_run import render_run_page
+
     render_run_page(app_state)
 
 with tab6:
-    from buildstock_rate_impact_calculator.ui.pages.page_06_results import render_results_page
+    from buildstock_rate_impact_calculator.ui.pages.page_06_results import (
+        render_results_page,
+    )
+
     render_results_page(app_state)

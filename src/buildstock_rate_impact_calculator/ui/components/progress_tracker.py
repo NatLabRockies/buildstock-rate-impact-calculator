@@ -8,6 +8,7 @@ immutable view to render — there is no message queue to drain, so update
 volume from many worker threads stays cheap and nothing is lost between
 reruns.
 """
+
 from __future__ import annotations
 import threading
 import time
@@ -19,9 +20,10 @@ from typing import Optional
 @dataclass
 class PhaseInfo:
     """Progress of one named pipeline phase."""
+
     name: str
     completed: int = 0
-    total: int = 0          # 0 = indeterminate (no meaningful total)
+    total: int = 0  # 0 = indeterminate (no meaningful total)
     done: bool = False
     started_at: float = field(default_factory=time.time)
 
@@ -49,6 +51,7 @@ class PhaseInfo:
 @dataclass
 class ProgressSnapshot:
     """Immutable view of the tracker state for rendering."""
+
     phases: list[PhaseInfo]
     message: str
     log: list[str]

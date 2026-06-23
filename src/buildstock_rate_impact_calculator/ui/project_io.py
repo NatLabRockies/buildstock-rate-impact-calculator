@@ -13,6 +13,7 @@ Directory layout written by save_project:
             └── results/
                 └── bill_results.csv
 """
+
 from __future__ import annotations
 
 import json
@@ -20,7 +21,9 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from buildstock_rate_impact_calculator.data.buildstock_manager import BuildStockDataManager
+from buildstock_rate_impact_calculator.data.buildstock_manager import (
+    BuildStockDataManager,
+)
 from buildstock_rate_impact_calculator.rates.urdb_client import URDBClient
 
 if TYPE_CHECKING:
@@ -215,6 +218,7 @@ def load_project(
 
     if session_state is None:
         import streamlit as st
+
         session_state = st.session_state  # type: ignore[assignment]
 
     # 1. Load config

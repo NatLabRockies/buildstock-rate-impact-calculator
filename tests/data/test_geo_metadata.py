@@ -5,6 +5,7 @@ assembly, column-projected multi-file loading with renames, and local caching.
 
 All tests run against local fixture files — no network access.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -18,8 +19,12 @@ from buildstock_rate_impact_calculator.data.buildstock_manager import (
 )
 
 
-def _make_mgr(tmp_path: Path, dataset_type: str = "comstock",
-              release: str = "2025_release_3", **kwargs: Any) -> BuildStockDataManager:
+def _make_mgr(
+    tmp_path: Path,
+    dataset_type: str = "comstock",
+    release: str = "2025_release_3",
+    **kwargs: Any,
+) -> BuildStockDataManager:
     return BuildStockDataManager(
         dataset_type=dataset_type,
         release=release,
@@ -32,6 +37,7 @@ def _make_mgr(tmp_path: Path, dataset_type: str = "comstock",
 # ===========================================================================
 # state_for_gisjoin
 # ===========================================================================
+
 
 class TestStateForGisjoin:
     def test_county_gisjoin(self) -> None:
@@ -50,6 +56,7 @@ class TestStateForGisjoin:
 # ===========================================================================
 # set_geo_selection / uses_geo_metadata / metadata_uris_for_upgrade
 # ===========================================================================
+
 
 class TestGeoUriConstruction:
     def test_resstock_never_uses_geo_metadata(self, tmp_path: Path) -> None:
@@ -125,6 +132,7 @@ class TestGeoUriConstruction:
 # get_app_metadata_columns
 # ===========================================================================
 
+
 class TestAppMetadataColumns:
     def test_includes_required_and_filter_columns(self, tmp_path: Path) -> None:
         mgr = _make_mgr(tmp_path)
@@ -153,18 +161,21 @@ class TestAppMetadataColumns:
 # load_upgrade_metadata — local fixture files, no network
 # ===========================================================================
 
+
 @pytest.fixture()
 def county_file(tmp_path: Path) -> Path:
     """County-style metadata fixture with ComStock geo column naming."""
     path = tmp_path / "county_AK.parquet"
-    pl.DataFrame({
-        "bldg_id": [1, 2],
-        "in.state": ["AK", "AK"],
-        "in.nhgis_county_gisjoin": ["G0200130", "G0200130"],
-        "in.comstock_building_type": ["SmallOffice", "Warehouse"],
-        "out.natural_gas.total.energy_consumption..kwh": [100.0, 200.0],
-        "out.unneeded_giant_column": [9.9, 9.9],
-    }).write_parquet(path)
+    pl.DataFrame(
+        {
+            "bldg_id": [1, 2],
+            "in.state": ["AK", "AK"],
+            "in.nhgis_county_gisjoin": ["G0200130", "G0200130"],
+            "in.comstock_building_type": ["SmallOffice", "Warehouse"],
+            "out.natural_gas.total.energy_consumption..kwh": [100.0, 200.0],
+            "out.unneeded_giant_column": [9.9, 9.9],
+        }
+    ).write_parquet(path)
     return path
 
 
@@ -172,13 +183,15 @@ def county_file(tmp_path: Path) -> Path:
 def puma_file(tmp_path: Path) -> Path:
     """PUMA-style metadata fixture."""
     path = tmp_path / "puma_AK.parquet"
-    pl.DataFrame({
-        "bldg_id": [3],
-        "in.state": ["AK"],
-        "in.nhgis_puma_gisjoin": ["G02000101"],
-        "in.comstock_building_type": ["RetailStandalone"],
-        "out.natural_gas.total.energy_consumption..kwh": [300.0],
-    }).write_parquet(path)
+    pl.DataFrame(
+        {
+            "bldg_id": [3],
+            "in.state": ["AK"],
+            "in.nhgis_puma_gisjoin": ["G02000101"],
+            "in.comstock_building_type": ["RetailStandalone"],
+            "out.natural_gas.total.energy_consumption..kwh": [300.0],
+        }
+    ).write_parquet(path)
     return path
 
 
@@ -201,7 +214,10 @@ class TestLoadUpgradeMetadata:
         assert "out.natural_gas.total.energy_consumption..kwh" in df.columns
 
     def test_multi_file_concat_county_and_puma(
-        self, tmp_path: Path, county_file: Path, puma_file: Path,
+        self,
+        tmp_path: Path,
+        county_file: Path,
+        puma_file: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         mgr = _make_mgr(tmp_path)
@@ -237,13 +253,15 @@ class TestLoadUpgradeMetadata:
         )
         df1 = mgr.load_upgrade_metadata(0)
         # Overwrite the source: a cached load must not see the change
-        pl.DataFrame({
-            "bldg_id": [99],
-            "in.state": ["AK"],
-            "in.nhgis_county_gisjoin": ["G0200130"],
-            "in.comstock_building_type": ["Hospital"],
-            "out.natural_gas.total.energy_consumption..kwh": [1.0],
-        }).write_parquet(county_file)
+        pl.DataFrame(
+            {
+                "bldg_id": [99],
+                "in.state": ["AK"],
+                "in.nhgis_county_gisjoin": ["G0200130"],
+                "in.comstock_building_type": ["Hospital"],
+                "out.natural_gas.total.energy_consumption..kwh": [1.0],
+            }
+        ).write_parquet(county_file)
         df2 = mgr.load_upgrade_metadata(0)
         assert df2["bldg_id"].to_list() == df1["bldg_id"].to_list()
         # force_reload bypasses the cache
@@ -270,7 +288,10 @@ class TestLoadUpgradeMetadata:
         monkeypatch.setattr(
             mgr,
             "metadata_uris_for_upgrade",
-            lambda upgrade_id: [str(tmp_path / "a.parquet"), str(tmp_path / "b.parquet")],
+            lambda upgrade_id: [
+                str(tmp_path / "a.parquet"),
+                str(tmp_path / "b.parquet"),
+            ],
         )
         with pytest.raises(RuntimeError, match="None of the"):
             mgr.load_upgrade_metadata(0)
@@ -279,6 +300,7 @@ class TestLoadUpgradeMetadata:
 # ===========================================================================
 # get_upgrade_applicability — geo-aware multi-file behavior
 # ===========================================================================
+
 
 @pytest.mark.integration
 class TestIntegrationGeoMetadata:
@@ -329,8 +351,6 @@ class TestGeoApplicability:
         monkeypatch.setattr(
             mgr, "metadata_uris_for_upgrade", lambda upgrade_id: ["uri_a", "uri_b"]
         )
-        monkeypatch.setattr(
-            pl, "scan_parquet", lambda uri, **k: frames[uri].lazy()
-        )
+        monkeypatch.setattr(pl, "scan_parquet", lambda uri, **k: frames[uri].lazy())
         result = mgr.get_upgrade_applicability(5, [1, 2, 3])
         assert result == {1: True, 2: True, 3: False}

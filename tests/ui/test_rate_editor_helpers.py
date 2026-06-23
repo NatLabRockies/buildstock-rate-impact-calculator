@@ -1,6 +1,7 @@
 """
 Tests for the pure schedule-construction helpers used by the TOU rate builder UI.
 """
+
 from __future__ import annotations
 
 from buildstock_rate_impact_calculator.ui.components.rate_editor import (
@@ -10,6 +11,7 @@ from buildstock_rate_impact_calculator.ui.components.rate_editor import (
 
 
 # ── build_tou_schedules ───────────────────────────────────────────────────────
+
 
 def test_empty_periods_give_all_base():
     weekday, weekend = build_tou_schedules([])
@@ -55,6 +57,7 @@ def test_later_periods_overwrite_earlier():
 
 # ── build_flat_demand ─────────────────────────────────────────────────────────
 
+
 def test_flat_demand_full_coverage_has_no_zero_period():
     rows = [
         {"rate": 15.0, "months": [6, 7, 8, 9]},
@@ -81,6 +84,6 @@ def test_flat_demand_later_rows_overwrite():
         {"rate": 9.0, "months": [7, 8]},
     ]
     structure, months = build_flat_demand(rows)
-    assert months[5] == 0   # June from first row
-    assert months[6] == 1   # July overwritten by second row
-    assert months[7] == 1   # August from second row
+    assert months[5] == 0  # June from first row
+    assert months[6] == 1  # July overwritten by second row
+    assert months[7] == 1  # August from second row

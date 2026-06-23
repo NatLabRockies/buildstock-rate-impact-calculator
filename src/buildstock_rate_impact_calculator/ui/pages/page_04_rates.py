@@ -13,17 +13,22 @@ Rate Assignment:
   After defining rates, assign each rate to one or more scenarios
   (baseline, upgrade_1, upgrade_2, ...).
 """
+
 from __future__ import annotations
 import streamlit as st
 
 from buildstock_rate_impact_calculator.ui.state import AppState
-from buildstock_rate_impact_calculator.ui.project_io import save_project as _save_project
+from buildstock_rate_impact_calculator.ui.project_io import (
+    save_project as _save_project,
+)
 from buildstock_rate_impact_calculator.ui.components.rate_editor import (
     render_urdb_search,
     render_tou_builder,
     render_flat_rate_form,
 )
-from buildstock_rate_impact_calculator.data.buildstock_manager import BuildStockDataManager
+from buildstock_rate_impact_calculator.data.buildstock_manager import (
+    BuildStockDataManager,
+)
 from buildstock_rate_impact_calculator.data.upgrade_labels import get_upgrade_label
 from buildstock_rate_impact_calculator.rates.fuel_rate import (
     FUEL_TYPES,
@@ -37,6 +42,7 @@ def _scenario_key(upgrade_id: int) -> str:
 
 
 # ── Fuel rate form ────────────────────────────────────────────────────────────
+
 
 def _render_fuel_rate_form(fuel_rate_library: dict) -> dict | None:
     """Render the fuel rate input form. Returns a new rate dict when submitted."""
@@ -111,7 +117,10 @@ def _render_fuel_rate_form(fuel_rate_library: dict) -> dict | None:
         )
 
         # Manage block rows in session state
-        if "fuel_blocks" not in st.session_state or st.session_state.get("fuel_blocks_fuel_type") != fuel_type:
+        if (
+            "fuel_blocks" not in st.session_state
+            or st.session_state.get("fuel_blocks_fuel_type") != fuel_type
+        ):
             st.session_state["fuel_blocks"] = [
                 {"consumption_limit": None, "rate": 0.0},
                 {"consumption_limit": None, "rate": 0.0},
@@ -151,7 +160,9 @@ def _render_fuel_rate_form(fuel_rate_library: dict) -> dict | None:
                 to_delete = i
 
             try:
-                cons_parsed: float | None = float(cons_str) if cons_str.strip() else None
+                cons_parsed: float | None = (
+                    float(cons_str) if cons_str.strip() else None
+                )
             except ValueError:
                 cons_parsed = None
             try:
@@ -159,7 +170,9 @@ def _render_fuel_rate_form(fuel_rate_library: dict) -> dict | None:
             except ValueError:
                 rate_parsed = 0.0
 
-            updated_blocks.append({"consumption_limit": cons_parsed, "rate": rate_parsed})
+            updated_blocks.append(
+                {"consumption_limit": cons_parsed, "rate": rate_parsed}
+            )
 
         if to_delete is not None:
             updated_blocks.pop(to_delete)
@@ -169,7 +182,9 @@ def _render_fuel_rate_form(fuel_rate_library: dict) -> dict | None:
         st.session_state["fuel_blocks"] = updated_blocks
 
         if st.button("＋ Add Block", key="fuel_add_block"):
-            st.session_state["fuel_blocks"].append({"consumption_limit": None, "rate": 0.0})
+            st.session_state["fuel_blocks"].append(
+                {"consumption_limit": None, "rate": 0.0}
+            )
             st.rerun()
 
         rate_dict = {
@@ -189,7 +204,9 @@ def _render_fuel_rate_form(fuel_rate_library: dict) -> dict | None:
             return None
         # Prevent duplicate names
         if rate_name in fuel_rate_library:
-            st.warning(f"A fuel rate named '{rate_name}' already exists. Rename it or remove the existing one.")
+            st.warning(
+                f"A fuel rate named '{rate_name}' already exists. Rename it or remove the existing one."
+            )
             return None
         return rate_dict
 
@@ -222,12 +239,14 @@ def render_rates_page(app_state: AppState) -> None:
     fuel_rate_library: dict[str, dict] = app_state.fuel_rate_library
 
     # ── Rate input tabs ───────────────────────────────────────────────────────
-    urdb_tab, tou_tab, flat_tab, fuel_tab = st.tabs([
-        "🔍 Search URDB", "⏱ Build TOU Rate", "📏 Flat Rate", "⛽ Fuel Rates"
-    ])
+    urdb_tab, tou_tab, flat_tab, fuel_tab = st.tabs(
+        ["🔍 Search URDB", "⏱ Build TOU Rate", "📏 Flat Rate", "⛽ Fuel Rates"]
+    )
 
     with urdb_tab:
-        new_rate = render_urdb_search(api_key=app_state.urdb_api_key, dataset_type=app_state.dataset_type)
+        new_rate = render_urdb_search(
+            api_key=app_state.urdb_api_key, dataset_type=app_state.dataset_type
+        )
         if new_rate:
             key = new_rate.get("name", f"URDB Rate {len(rate_library) + 1}")
             rate_library[key] = new_rate
@@ -263,9 +282,7 @@ def render_rates_page(app_state: AppState) -> None:
 
     # ── Configured rates ──────────────────────────────────────────────────────
     st.subheader("Configured Rates")
-    st.caption(
-        "ℹ️ Energy charges not configured will be taken from dataset defaults."
-    )
+    st.caption("ℹ️ Energy charges not configured will be taken from dataset defaults.")
 
     # Electricity rates
     st.markdown("**⚡ Electricity Rates**")
@@ -276,13 +293,24 @@ def render_rates_page(app_state: AppState) -> None:
             col1, col2 = st.columns([5, 1])
             with col1:
                 with st.expander(f"📋 {rate_name}"):
-                    st.json({
-                        k: v for k, v in rate_dict.items()
-                        if k in ("name", "utility", "sector", "fixedchargefirstmeter",
-                                 "fixedchargeunits", "energyratestructure",
-                                 "demandratestructure", "flatdemandstructure",
-                                 "flatdemandmonths")
-                    })
+                    st.json(
+                        {
+                            k: v
+                            for k, v in rate_dict.items()
+                            if k
+                            in (
+                                "name",
+                                "utility",
+                                "sector",
+                                "fixedchargefirstmeter",
+                                "fixedchargeunits",
+                                "energyratestructure",
+                                "demandratestructure",
+                                "flatdemandstructure",
+                                "flatdemandmonths",
+                            )
+                        }
+                    )
             with col2:
                 if st.button("🗑 Remove", key=f"remove_rate_{rate_name}"):
                     del rate_library[rate_name]
@@ -299,7 +327,9 @@ def render_rates_page(app_state: AppState) -> None:
         ft_label = FUEL_TYPE_LABELS[ft]
         icon = {"natural_gas": "🔥", "propane": "🛢️", "fuel_oil": "🛢️"}[ft]
         st.markdown(f"**{icon} {ft_label} Rates**")
-        ft_rates = {n: r for n, r in fuel_rate_library.items() if r.get("fuel_type") == ft}
+        ft_rates = {
+            n: r for n, r in fuel_rate_library.items() if r.get("fuel_type") == ft
+        }
         if not ft_rates:
             st.info(f"No {ft_label} rates configured. Using dataset defaults.")
         else:
@@ -309,7 +339,9 @@ def render_rates_page(app_state: AppState) -> None:
                     with st.expander(f"📋 {rate_name}"):
                         display = {
                             "fuel_type": rate_dict.get("fuel_type"),
-                            "fixed_monthly_charge": rate_dict.get("fixed_monthly_charge"),
+                            "fixed_monthly_charge": rate_dict.get(
+                                "fixed_monthly_charge"
+                            ),
                             "is_block_rate": rate_dict.get("is_block_rate"),
                         }
                         if rate_dict.get("is_block_rate"):
@@ -347,12 +379,16 @@ def render_rates_page(app_state: AppState) -> None:
     for upgrade_id in scenarios:
         scenario_key = _scenario_key(upgrade_id)
         label = get_upgrade_label(_base_uri, upgrade_id)
-        scenario_display = f"Upgrade {upgrade_id}: {label}" if upgrade_id > 0 else f"Baseline: {label}"
+        scenario_display = (
+            f"Upgrade {upgrade_id}: {label}" if upgrade_id > 0 else f"Baseline: {label}"
+        )
 
         current_name = app_state.rate_assignments.get(scenario_key)
 
         try:
-            current_idx = rate_names.index(current_name) + 1 if current_name in rate_names else 0
+            current_idx = (
+                rate_names.index(current_name) + 1 if current_name in rate_names else 0
+            )
         except ValueError:
             current_idx = 0
 
@@ -372,7 +408,9 @@ def render_rates_page(app_state: AppState) -> None:
     # Fuel types — only show assignment if rates exist for that type
     for ft in FUEL_TYPES:
         ft_label = FUEL_TYPE_LABELS[ft]
-        ft_rate_names = [n for n, r in fuel_rate_library.items() if r.get("fuel_type") == ft]
+        ft_rate_names = [
+            n for n, r in fuel_rate_library.items() if r.get("fuel_type") == ft
+        ]
         if not ft_rate_names:
             continue
 
@@ -383,7 +421,9 @@ def render_rates_page(app_state: AppState) -> None:
             scenario_key = _scenario_key(upgrade_id)
             label = get_upgrade_label(_base_uri, upgrade_id)
             scenario_display = (
-                f"Upgrade {upgrade_id}: {label}" if upgrade_id > 0 else f"Baseline: {label}"
+                f"Upgrade {upgrade_id}: {label}"
+                if upgrade_id > 0
+                else f"Baseline: {label}"
             )
 
             # Initialise nested dict if needed
@@ -393,7 +433,11 @@ def render_rates_page(app_state: AppState) -> None:
             current_fuel_name = app_state.fuel_rate_assignments[scenario_key].get(ft)
 
             try:
-                current_idx = ft_rate_names.index(current_fuel_name) + 1 if current_fuel_name in ft_rate_names else 0
+                current_idx = (
+                    ft_rate_names.index(current_fuel_name) + 1
+                    if current_fuel_name in ft_rate_names
+                    else 0
+                )
             except ValueError:
                 current_idx = 0
 
@@ -413,7 +457,10 @@ def render_rates_page(app_state: AppState) -> None:
     assigned_count = len(app_state.rate_assignments)
     total_scenarios = len(scenarios)
     if assigned_count == total_scenarios:
-        st.success(f"All {total_scenarios} scenario(s) have an electricity rate assigned. Ready for Phase 5.")
+        st.success(
+            f"All {total_scenarios} scenario(s) have an electricity rate assigned. Ready for Phase 5."
+        )
     else:
-        st.warning(f"{assigned_count} of {total_scenarios} scenario(s) have electricity rates assigned.")
-
+        st.warning(
+            f"{assigned_count} of {total_scenarios} scenario(s) have electricity rates assigned."
+        )

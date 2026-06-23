@@ -43,17 +43,14 @@ def setup_logging(
     # prevent adding duplicate handlers
     if logger.handlers:
         return logger
-    
+
     logger.setLevel(log_level)
-    
+
     # Create formatters
     detailed_formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'
+        "%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s"
     )
-    console_formatter = logging.Formatter(
-        '%(levelname)s - %(message)s'
-    )
-    
+    console_formatter = logging.Formatter("%(levelname)s - %(message)s")
 
     # only add console handler if log_level is WARNING or higher
     # Console handler (INFO and below)
@@ -62,13 +59,13 @@ def setup_logging(
     console_handler.setFormatter(console_formatter)
     console_handler.addFilter(lambda record: record.levelno <= logging.INFO)
     logger.addHandler(console_handler)
-    
+
     # Error console handler (WARNING and above)
     error_console_handler = logging.StreamHandler(sys.stderr)
     error_console_handler.setLevel(logging.WARNING)
     error_console_handler.setFormatter(detailed_formatter)
     logger.addHandler(error_console_handler)
-    
+
     # File handler (if log file specified)
     if log_file:
         try:
@@ -83,50 +80,51 @@ def setup_logging(
             logger.addHandler(file_handler)
         except Exception as e:
             print(f"Failed to set up file logging at {log_file}: {e}")
-        
+
     # Log initial setup
     logger.info(f"Logger initialized for {module_name}")
     logger.debug(f"Log level set to {logging.getLevelName(log_level)}")
     if log_file:
         logger.debug(f"Logging to file: {log_file}")
-    
+
     # prevent propagation to root logger
     # logger.propagate = False
 
     return logger
 
+
 # Example log message categories for consistent messaging
 class LogMessages:
     """Standard log message templates for consistent logging."""
-    
+
     # Data validation
     VALIDATION_ERROR = "Validation error: {}"
     VALIDATION_WARNING = "Validation warning: {}"
-    
+
     # Data processing
     PROCESSING_START = "Starting {} processing"
     PROCESSING_COMPLETE = "Completed {} processing"
     PROCESSING_ERROR = "Error during {} processing: {}"
-    
+
     # Rate structure
     RATE_FETCH_START = "Fetching rate data for {}"
     RATE_FETCH_COMPLETE = "Successfully fetched rate data: {}"
     RATE_SETUP_ERROR = "Error setting up rate structure: {}"
-    
+
     # Load profile
     LOAD_PROFILE_START = "Reading load profile from {}"
     LOAD_PROFILE_COMPLETE = "Successfully read load profile: {} points"
     LOAD_PROFILE_ERROR = "Error reading load profile: {}"
-    
+
     # Calculations
     CALCULATION_START = "Starting bill calculation"
     CALCULATION_COMPLETE = "Completed bill calculation"
     CALCULATION_ERROR = "Error during bill calculation: {}"
-    
+
     # Configuration
     CONFIG_ERROR = "Configuration error: {}"
     CONFIG_WARNING = "Configuration warning: {}"
-    
+
     @staticmethod
     def data_summary(name: str, data) -> str:
         """Create a standard data summary message."""

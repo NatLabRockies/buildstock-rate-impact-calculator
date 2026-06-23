@@ -4,8 +4,9 @@ FlatRate — simple flat energy rate structure.
 Provides a lightweight dataclass for defining flat (non-TOU) utility rates
 and converting them to URDB v8-compatible dicts for use with PySAM.
 """
+
 from __future__ import annotations
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 import copy
 
@@ -22,6 +23,7 @@ class FlatRate:
         utility: Utility company name.
         sector: Rate sector ('Residential' or 'Commercial').
     """
+
     energy_rate: float
     fixed_monthly_charge: float = 0.0
     name: str = "Custom Flat Rate"
@@ -60,7 +62,9 @@ class FlatRate:
             "sector": self.sector,
             "fixedchargefirstmeter": self.fixed_monthly_charge,
             "fixedchargeunits": "$/month",
-            "energyratestructure": [[{"rate": self.energy_rate, "adj": 0.0, "sell": 0.0}]],
+            "energyratestructure": [
+                [{"rate": self.energy_rate, "adj": 0.0, "sell": 0.0}]
+            ],
             "energyweekdayschedule": copy.deepcopy(flat_schedule),
             "energyweekendschedule": copy.deepcopy(flat_schedule),
             "demandratestructure": [],

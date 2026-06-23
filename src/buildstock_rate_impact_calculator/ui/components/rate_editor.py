@@ -6,6 +6,7 @@ Three modes:
   2. TOU Builder — build a custom TOU rate interactively
   3. Flat Rate   — simple $/kWh entry
 """
+
 from __future__ import annotations
 import datetime
 import pandas as pd
@@ -17,8 +18,20 @@ from buildstock_rate_impact_calculator.rates.rate_builder import (
     FixedChargeUnits,
 )
 
-_MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+_MONTH_NAMES = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+]
 _ALL_MONTHS = list(range(1, 13))
 _ALL_HOURS = list(range(24))
 _DAY_OPTIONS = ["All days", "Weekdays only", "Weekends only"]
@@ -96,6 +109,7 @@ def _fmt_ts(ts: object) -> str:
 def _get_urdb_client(api_key: str):
     """Return a URDBClient for *api_key*."""
     from buildstock_rate_impact_calculator.rates.urdb_client import URDBClient
+
     return URDBClient(api_key=api_key)
 
 
@@ -119,7 +133,6 @@ def render_urdb_search(api_key: str, dataset_type: str = "resstock") -> Optional
     Returns:
         Selected rate dict or None.
     """
-    from buildstock_rate_impact_calculator.rates.urdb_client import URDBClient
 
     st.markdown(
         "Search for an existing rate in the "
@@ -160,8 +173,7 @@ def render_urdb_search(api_key: str, dataset_type: str = "resstock") -> Optional
     if not matches:
         words = q.split()
         matches = [
-            c for c in companies
-            if all(w in c.get("label", "").lower() for w in words)
+            c for c in companies if all(w in c.get("label", "").lower() for w in words)
         ]
 
     if not matches:
@@ -182,7 +194,9 @@ def render_urdb_search(api_key: str, dataset_type: str = "resstock") -> Optional
     filter_col1, filter_col2 = st.columns(2)
 
     # Sector — default based on dataset type
-    _sector_default = "Commercial" if dataset_type.lower() == "comstock" else "Residential"
+    _sector_default = (
+        "Commercial" if dataset_type.lower() == "comstock" else "Residential"
+    )
     with filter_col1:
         sector_choice: str = st.selectbox(
             "Sector",
@@ -191,7 +205,13 @@ def render_urdb_search(api_key: str, dataset_type: str = "resstock") -> Optional
             key="urdb_filter_sector",
         )
 
-        service_type_options = ["Any", "Bundled", "Energy", "Delivery", "Delivery with Standard Offer"]
+        service_type_options = [
+            "Any",
+            "Bundled",
+            "Energy",
+            "Delivery",
+            "Delivery with Standard Offer",
+        ]
         service_type_choice: str = st.selectbox(
             "Service Type",
             options=service_type_options,
@@ -221,16 +241,21 @@ def render_urdb_search(api_key: str, dataset_type: str = "resstock") -> Optional
         st.session_state.pop("urdb_selected_idx", None)
         try:
             import datetime as _dt
+
             client = _get_urdb_client(api_key)
 
             # Convert effective_as_of date to Unix timestamp (start of day UTC)
             _eff_dt = _dt.datetime(
-                effective_date.year, effective_date.month, effective_date.day,
+                effective_date.year,
+                effective_date.month,
+                effective_date.day,
                 tzinfo=_dt.timezone.utc,
             )
             effective_ts = int(_eff_dt.timestamp())
 
-            servicetype_param = None if service_type_choice == "Any" else service_type_choice
+            servicetype_param = (
+                None if service_type_choice == "Any" else service_type_choice
+            )
 
             with st.spinner(f"Searching rates for {selected_label}…"):
                 results = client.search_rates_by_utility_raw(
@@ -241,7 +266,16 @@ def render_urdb_search(api_key: str, dataset_type: str = "resstock") -> Optional
                     limit=50,
                 )
             # Strip to display-only fields — full rate data is fetched on explicit load
-            _DISPLAY_KEYS = {"name", "utility", "sector", "approved", "startdate", "enddate", "label", "is_default"}
+            _DISPLAY_KEYS = {
+                "name",
+                "utility",
+                "sector",
+                "approved",
+                "startdate",
+                "enddate",
+                "label",
+                "is_default",
+            }
             st.session_state["urdb_search_results"] = [
                 {k: v for k, v in r.items() if k in _DISPLAY_KEYS} for r in results
             ]
@@ -261,7 +295,9 @@ def render_urdb_search(api_key: str, dataset_type: str = "resstock") -> Optional
     if default_only:
         results = [r for r in results if r.get("is_default")]
         if not results:
-            st.info("No default rates found for this utility. Uncheck 'Default rates only' to see all rates.")
+            st.info(
+                "No default rates found for this utility. Uncheck 'Default rates only' to see all rates."
+            )
             return None
 
     display_rows = [
@@ -277,7 +313,7 @@ def render_urdb_search(api_key: str, dataset_type: str = "resstock") -> Optional
         for r in results
     ]
     df = pd.DataFrame(display_rows)
-    st.dataframe(df, width='stretch', hide_index=True)
+    st.dataframe(df, width="stretch", hide_index=True)
 
     label_options = [r.get("label", "") for r in results if r.get("label")]
     name_options = [
@@ -324,9 +360,15 @@ def _add_row(prefix: str) -> None:
     st.session_state[f"{prefix}_next_id"] = next_id + 1
 
 
-def _render_tou_period_row(prefix: str, rid: int, position: int,
-                           rate_label: str, default_rate: float,
-                           rate_format: str, rate_step: float) -> tuple[dict, bool]:
+def _render_tou_period_row(
+    prefix: str,
+    rid: int,
+    position: int,
+    rate_label: str,
+    default_rate: float,
+    rate_format: str,
+    rate_step: float,
+) -> tuple[dict, bool]:
     """
     Render one TOU period row (name, rate, months, hours, day type).
 
@@ -335,11 +377,17 @@ def _render_tou_period_row(prefix: str, rid: int, position: int,
     """
     with st.container(border=True):
         c1, c2, c3 = st.columns([3, 2, 1], vertical_alignment="bottom")
-        name = c1.text_input("Period name", value=f"Period {position}",
-                             key=f"{prefix}_name_{rid}")
-        rate = c2.number_input(rate_label, min_value=0.0, value=default_rate,
-                               step=rate_step, format=rate_format,
-                               key=f"{prefix}_rate_{rid}")
+        name = c1.text_input(
+            "Period name", value=f"Period {position}", key=f"{prefix}_name_{rid}"
+        )
+        rate = c2.number_input(
+            rate_label,
+            min_value=0.0,
+            value=default_rate,
+            step=rate_step,
+            format=rate_format,
+            key=f"{prefix}_rate_{rid}",
+        )
         removed = c3.button("✕", key=f"{prefix}_del_{rid}", help="Remove this period")
 
         m1, m2 = st.columns(2)
@@ -357,15 +405,24 @@ def _render_tou_period_row(prefix: str, rid: int, position: int,
             format_func=lambda h: f"{h:02d}:00",
             key=f"{prefix}_hours_{rid}",
         )
-        days = st.selectbox("Applies on", options=_DAY_OPTIONS, key=f"{prefix}_days_{rid}")
+        days = st.selectbox(
+            "Applies on", options=_DAY_OPTIONS, key=f"{prefix}_days_{rid}"
+        )
 
-    return {"name": name, "rate": rate, "months": months, "hours": hours, "days": days}, removed
+    return {
+        "name": name,
+        "rate": rate,
+        "months": months,
+        "hours": hours,
+        "days": days,
+    }, removed
 
 
 def _schedule_preview_df(schedule: list[list[int]]) -> pd.DataFrame:
     """12x24 schedule matrix as a months-by-hours DataFrame for display."""
-    return pd.DataFrame(schedule, index=_MONTH_NAMES,
-                        columns=[f"{h:02d}" for h in range(24)])
+    return pd.DataFrame(
+        schedule, index=_MONTH_NAMES, columns=[f"{h:02d}" for h in range(24)]
+    )
 
 
 def render_tou_builder() -> Optional[dict]:
@@ -388,26 +445,44 @@ def render_tou_builder() -> Optional[dict]:
     # ── Basic info ─────────────────────────────────────────────────────────────
     col1, col2 = st.columns(2)
     with col1:
-        rate_name = st.text_input("Rate Name", value="Custom TOU Rate", key="tou_rate_name")
-        sector = st.selectbox("Sector", options=["Residential", "Commercial", "Industrial"],
-                              key="tou_sector")
+        rate_name = st.text_input(
+            "Rate Name", value="Custom TOU Rate", key="tou_rate_name"
+        )
+        sector = st.selectbox(
+            "Sector",
+            options=["Residential", "Commercial", "Industrial"],
+            key="tou_sector",
+        )
     with col2:
-        utility_name = st.text_input("Utility Name", value="Custom Utility", key="tou_utility_name")
+        utility_name = st.text_input(
+            "Utility Name", value="Custom Utility", key="tou_utility_name"
+        )
 
     # ── Fixed meter charge ─────────────────────────────────────────────────────
     st.subheader("Fixed Meter Charge")
     fc1, fc2 = st.columns([3, 2])
     with fc1:
-        fixed_charge = st.number_input("Fixed Charge", min_value=0.0, value=0.0,
-                                       step=0.50, format="%.2f", key="tou_fixed_charge")
+        fixed_charge = st.number_input(
+            "Fixed Charge",
+            min_value=0.0,
+            value=0.0,
+            step=0.50,
+            format="%.2f",
+            key="tou_fixed_charge",
+        )
     with fc2:
-        fixed_units = st.selectbox("Units", options=["$/month", "$/day"], key="tou_fixed_units")
+        fixed_units = st.selectbox(
+            "Units", options=["$/month", "$/day"], key="tou_fixed_units"
+        )
 
     # ── Energy rates ───────────────────────────────────────────────────────────
     st.subheader("Energy Rates")
     base_rate = st.number_input(
         "Base (off-peak) Energy Rate ($/kWh)",
-        min_value=0.0, value=0.10, step=0.001, format="%.4f",
+        min_value=0.0,
+        value=0.10,
+        step=0.001,
+        format="%.4f",
         key="tou_base_rate",
         help="Applies to all hours not covered by a TOU energy period below.",
     )
@@ -441,8 +516,14 @@ def render_tou_builder() -> Optional[dict]:
     for rid in list(_row_ids("tou_fd")):
         with st.container(border=True):
             c1, c2, c3 = st.columns([2, 3, 1], vertical_alignment="bottom")
-            fd_rate = c1.number_input("Rate ($/kW)", min_value=0.0, value=10.0,
-                                      step=0.50, format="%.2f", key=f"tou_fd_rate_{rid}")
+            fd_rate = c1.number_input(
+                "Rate ($/kW)",
+                min_value=0.0,
+                value=10.0,
+                step=0.50,
+                format="%.2f",
+                key=f"tou_fd_rate_{rid}",
+            )
             fd_months = c2.multiselect(
                 "Months",
                 options=_ALL_MONTHS,
@@ -484,8 +565,10 @@ def render_tou_builder() -> Optional[dict]:
                 weekday, weekend = build_tou_schedules(energy_periods)
                 legend = "; ".join(
                     [f"0 = base (${base_rate:.4f}/kWh)"]
-                    + [f"{i} = {p['name']} (${p['rate']:.4f}/kWh)"
-                       for i, p in enumerate(energy_periods, start=1)]
+                    + [
+                        f"{i} = {p['name']} (${p['rate']:.4f}/kWh)"
+                        for i, p in enumerate(energy_periods, start=1)
+                    ]
                 )
                 st.markdown(f"**Energy periods:** {legend}")
                 st.caption("Weekdays")
@@ -496,8 +579,10 @@ def render_tou_builder() -> Optional[dict]:
                 d_weekday, d_weekend = build_tou_schedules(demand_periods)
                 legend = "; ".join(
                     ["0 = no TOU demand charge"]
-                    + [f"{i} = {p['name']} (${p['rate']:.2f}/kW)"
-                       for i, p in enumerate(demand_periods, start=1)]
+                    + [
+                        f"{i} = {p['name']} (${p['rate']:.2f}/kW)"
+                        for i, p in enumerate(demand_periods, start=1)
+                    ]
                 )
                 st.markdown(f"**Demand periods:** {legend}")
                 st.caption("Weekdays")
@@ -514,13 +599,17 @@ def render_tou_builder() -> Optional[dict]:
         errors.append("Rate name is required.")
     for period in energy_periods:
         if not period["months"] or not period["hours"]:
-            errors.append(f"Energy period '{period['name']}' needs at least one month and one hour.")
+            errors.append(
+                f"Energy period '{period['name']}' needs at least one month and one hour."
+            )
     for i, row in enumerate(monthly_demand_rows, start=1):
         if not row["months"]:
             errors.append(f"Monthly demand charge {i} needs at least one month.")
     for period in demand_periods:
         if not period["months"] or not period["hours"]:
-            errors.append(f"Demand period '{period['name']}' needs at least one month and one hour.")
+            errors.append(
+                f"Demand period '{period['name']}' needs at least one month and one hour."
+            )
     if errors:
         for err in errors:
             st.error(err)
@@ -528,7 +617,9 @@ def render_tou_builder() -> Optional[dict]:
 
     try:
         builder = UrdbRateBuilder(validate_pysam=False)
-        builder.basic_info(rate_name.strip(), utility_name.strip() or "Custom Utility", sector)
+        builder.basic_info(
+            rate_name.strip(), utility_name.strip() or "Custom Utility", sector
+        )
         builder.fixed_charge(fixed_charge, FixedChargeUnits(fixed_units))
 
         # Energy: period 0 is the base rate; TOU periods follow in row order
@@ -540,7 +631,9 @@ def render_tou_builder() -> Optional[dict]:
 
         if demand_periods:
             builder.enable_demand_charges()
-            builder.add_demand_tier(0, None, 0.0)  # hours outside all TOU demand periods
+            builder.add_demand_tier(
+                0, None, 0.0
+            )  # hours outside all TOU demand periods
             for i, period in enumerate(demand_periods, start=1):
                 builder.add_demand_tier(i, None, period["rate"])
             d_weekday, d_weekend = build_tou_schedules(demand_periods)
@@ -580,7 +673,11 @@ def render_flat_rate_form() -> Optional[dict]:
         with col1:
             rate_name = st.text_input("Rate Name", value="Custom Flat Rate")
             energy_rate = st.number_input(
-                "Energy Rate ($/kWh)", min_value=0.0, value=0.12, step=0.001, format="%.4f"
+                "Energy Rate ($/kWh)",
+                min_value=0.0,
+                value=0.12,
+                step=0.001,
+                format="%.4f",
             )
         with col2:
             utility_name = st.text_input("Utility Name", value="Custom Utility")
@@ -598,8 +695,11 @@ def render_flat_rate_form() -> Optional[dict]:
     try:
         builder = (
             UrdbRateBuilder(validate_pysam=False)
-            .basic_info(rate_name.strip() or "Custom Flat Rate",
-                        utility_name.strip() or "Custom Utility", sector)
+            .basic_info(
+                rate_name.strip() or "Custom Flat Rate",
+                utility_name.strip() or "Custom Utility",
+                sector,
+            )
             .fixed_charge(fixed_charge, FixedChargeUnits(fixed_units))
             .simple_flat_rate(energy_rate)
         )

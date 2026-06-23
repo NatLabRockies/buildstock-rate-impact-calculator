@@ -2,6 +2,7 @@
 Upgrade package labels fetched dynamically from each dataset's ``upgrades_lookup.json``
 file on OEDI.  Labels are cached in-process after the first fetch.
 """
+
 from __future__ import annotations
 
 import logging

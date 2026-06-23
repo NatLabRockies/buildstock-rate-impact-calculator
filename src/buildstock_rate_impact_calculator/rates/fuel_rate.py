@@ -9,6 +9,7 @@ Unit conversion constants assume standard energy content values:
   - gal propane:  1 gallon      = 26.796   kWh  (91,452 BTU/gal)
   - gal fuel oil: 1 gallon      = 40.576   kWh  (138,500 BTU/gal for No. 2)
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -26,25 +27,26 @@ FUEL_TYPE_LABELS: dict[str, str] = {
 # kWh per one unit of each rate denomination, keyed by fuel type
 FUEL_RATE_UNITS: dict[str, dict[str, float]] = {
     "natural_gas": {
-        "$/Mcf":   298.9,
-        "$/Ccf":    29.89,
-        "$/Therm":  29.3071,
-        "$/kBtu":    0.293071,
+        "$/Mcf": 298.9,
+        "$/Ccf": 29.89,
+        "$/Therm": 29.3071,
+        "$/kBtu": 0.293071,
     },
     "propane": {
         "$/gallon": 26.796,
-        "$/Therm":  29.3071,
-        "$/kBtu":    0.293071,
+        "$/Therm": 29.3071,
+        "$/kBtu": 0.293071,
     },
     "fuel_oil": {
         "$/gallon": 40.576,
-        "$/Therm":  29.3071,
-        "$/kBtu":    0.293071,
+        "$/Therm": 29.3071,
+        "$/kBtu": 0.293071,
     },
 }
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
 
 def kwh_per_unit(fuel_type: str, unit: str) -> float:
     """Return kWh equivalent of one unit for the given fuel type and rate unit.
@@ -96,6 +98,7 @@ def _apply_block_rate(consumption_units: float, blocks: list[dict]) -> float:
 
 
 # ── Main calculation ─────────────────────────────────────────────────────────
+
 
 def calculate_fuel_bill(
     annual_energy_kwh: float,

@@ -1,6 +1,7 @@
 """
 Altair chart components for BuildStock TOU Calculator results visualization.
 """
+
 from __future__ import annotations
 from typing import Optional
 
@@ -39,14 +40,18 @@ def render_bill_comparison_bar(
         color = alt.Color(f"{upgrade_col}:N", title="Upgrade")
         x_offset = None
 
-    bar = alt.Chart(pandas_df).mark_bar().encode(
-        x=x,
-        y=alt.Y(f"{bill_col}:Q", title="Mean Annual Bill ($)"),
-        color=color,
-        tooltip=[
-            alt.Tooltip(f"{upgrade_col}:N", title="Upgrade"),
-            alt.Tooltip(f"{bill_col}:Q", title="Mean Bill ($)", format="$.2f"),
-        ],
+    bar = (
+        alt.Chart(pandas_df)
+        .mark_bar()
+        .encode(
+            x=x,
+            y=alt.Y(f"{bill_col}:Q", title="Mean Annual Bill ($)"),
+            color=color,
+            tooltip=[
+                alt.Tooltip(f"{upgrade_col}:N", title="Upgrade"),
+                alt.Tooltip(f"{bill_col}:Q", title="Mean Bill ($)", format="$.2f"),
+            ],
+        )
     )
 
     if x_offset is not None:
@@ -81,19 +86,25 @@ def render_bill_distribution(
     pandas_df = df.to_pandas()
     pandas_df[upgrade_col] = pandas_df[upgrade_col].astype(str)
 
-    box = alt.Chart(pandas_df).mark_boxplot(extent="min-max").encode(
-        x=alt.X(f"{upgrade_col}:N", title="Upgrade Scenario"),
-        y=alt.Y(f"{bill_col}:Q", title="Annual Bill ($)"),
-        color=alt.Color(f"{upgrade_col}:N", title="Upgrade"),
-        tooltip=[
-            alt.Tooltip(f"{upgrade_col}:N", title="Upgrade"),
-            alt.Tooltip(f"{bill_col}:Q", title="Annual Bill ($)", format="$.2f"),
-        ],
+    box = (
+        alt.Chart(pandas_df)
+        .mark_boxplot(extent="min-max")
+        .encode(
+            x=alt.X(f"{upgrade_col}:N", title="Upgrade Scenario"),
+            y=alt.Y(f"{bill_col}:Q", title="Annual Bill ($)"),
+            color=alt.Color(f"{upgrade_col}:N", title="Upgrade"),
+            tooltip=[
+                alt.Tooltip(f"{upgrade_col}:N", title="Upgrade"),
+                alt.Tooltip(f"{bill_col}:Q", title="Annual Bill ($)", format="$.2f"),
+            ],
+        )
     )
 
     if group_col and group_col in pandas_df.columns:
         box = box.facet(
-            facet=alt.Facet(f"{group_col}:N", title=group_col.replace("_", " ").title()),
+            facet=alt.Facet(
+                f"{group_col}:N", title=group_col.replace("_", " ").title()
+            ),
             columns=3,
         ).properties(title="Annual Bill Distribution by Scenario")
     else:

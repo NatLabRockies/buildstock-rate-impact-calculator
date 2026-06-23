@@ -1,9 +1,8 @@
 """Tests for load_project orchestrator in project_io."""
+
 from __future__ import annotations
-import csv
 import json
 from pathlib import Path
-import pytest
 
 from buildstock_rate_impact_calculator.ui.project_io import (
     load_project,
@@ -12,7 +11,12 @@ from buildstock_rate_impact_calculator.ui.project_io import (
 from buildstock_rate_impact_calculator.ui.state import AppState
 
 
-def _make_project(tmp_path: Path, config: dict, rates: list[dict] | None = None, results_csv: str | None = None) -> Path:
+def _make_project(
+    tmp_path: Path,
+    config: dict,
+    rates: list[dict] | None = None,
+    results_csv: str | None = None,
+) -> Path:
     """Helper: create a minimal project directory structure."""
     project_dir = tmp_path
     rates_dir = project_dir / "rates"
@@ -26,8 +30,13 @@ def _make_project(tmp_path: Path, config: dict, rates: list[dict] | None = None,
         for rate_dict in rates:
             # Use label as filename if present, else sanitize name
             import re
+
             label = rate_dict.get("label", "")
-            filename = f"{label}.json" if label else re.sub(r"[^\w]", "_", rate_dict.get("name", "rate")) + ".json"
+            filename = (
+                f"{label}.json"
+                if label
+                else re.sub(r"[^\w]", "_", rate_dict.get("name", "rate")) + ".json"
+            )
             (rates_dir / filename).write_text(json.dumps(rate_dict), encoding="utf-8")
 
     if results_csv is not None:

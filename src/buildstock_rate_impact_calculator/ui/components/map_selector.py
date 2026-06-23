@@ -8,6 +8,7 @@ Renders a hierarchical Folium map:
 
 Uses streamlit-folium for rendering.
 """
+
 from __future__ import annotations
 
 import csv
@@ -20,6 +21,7 @@ import streamlit as st
 
 try:
     from streamlit_folium import st_folium
+
     _FOLIUM_AVAILABLE = True
 except ImportError:
     _FOLIUM_AVAILABLE = False
@@ -34,38 +36,117 @@ _PUMA_GEOJSON_FILE = "cb_2019_us_puma10_500k.geojson"
 
 # Map US state names (from GeoJSON) → FIPS abbreviations used in BuildStock
 _STATE_NAME_TO_ABBR: dict[str, str] = {
-    "Alabama": "AL", "Alaska": "AK", "Arizona": "AZ", "Arkansas": "AR",
-    "California": "CA", "Colorado": "CO", "Connecticut": "CT", "Delaware": "DE",
-    "Florida": "FL", "Georgia": "GA", "Hawaii": "HI", "Idaho": "ID",
-    "Illinois": "IL", "Indiana": "IN", "Iowa": "IA", "Kansas": "KS",
-    "Kentucky": "KY", "Louisiana": "LA", "Maine": "ME", "Maryland": "MD",
-    "Massachusetts": "MA", "Michigan": "MI", "Minnesota": "MN", "Mississippi": "MS",
-    "Missouri": "MO", "Montana": "MT", "Nebraska": "NE", "Nevada": "NV",
-    "New Hampshire": "NH", "New Jersey": "NJ", "New Mexico": "NM", "New York": "NY",
-    "North Carolina": "NC", "North Dakota": "ND", "Ohio": "OH", "Oklahoma": "OK",
-    "Oregon": "OR", "Pennsylvania": "PA", "Rhode Island": "RI", "South Carolina": "SC",
-    "South Dakota": "SD", "Tennessee": "TN", "Texas": "TX", "Utah": "UT",
-    "Vermont": "VT", "Virginia": "VA", "Washington": "WA", "West Virginia": "WV",
-    "Wisconsin": "WI", "Wyoming": "WY", "District of Columbia": "DC",
+    "Alabama": "AL",
+    "Alaska": "AK",
+    "Arizona": "AZ",
+    "Arkansas": "AR",
+    "California": "CA",
+    "Colorado": "CO",
+    "Connecticut": "CT",
+    "Delaware": "DE",
+    "Florida": "FL",
+    "Georgia": "GA",
+    "Hawaii": "HI",
+    "Idaho": "ID",
+    "Illinois": "IL",
+    "Indiana": "IN",
+    "Iowa": "IA",
+    "Kansas": "KS",
+    "Kentucky": "KY",
+    "Louisiana": "LA",
+    "Maine": "ME",
+    "Maryland": "MD",
+    "Massachusetts": "MA",
+    "Michigan": "MI",
+    "Minnesota": "MN",
+    "Mississippi": "MS",
+    "Missouri": "MO",
+    "Montana": "MT",
+    "Nebraska": "NE",
+    "Nevada": "NV",
+    "New Hampshire": "NH",
+    "New Jersey": "NJ",
+    "New Mexico": "NM",
+    "New York": "NY",
+    "North Carolina": "NC",
+    "North Dakota": "ND",
+    "Ohio": "OH",
+    "Oklahoma": "OK",
+    "Oregon": "OR",
+    "Pennsylvania": "PA",
+    "Rhode Island": "RI",
+    "South Carolina": "SC",
+    "South Dakota": "SD",
+    "Tennessee": "TN",
+    "Texas": "TX",
+    "Utah": "UT",
+    "Vermont": "VT",
+    "Virginia": "VA",
+    "Washington": "WA",
+    "West Virginia": "WV",
+    "Wisconsin": "WI",
+    "Wyoming": "WY",
+    "District of Columbia": "DC",
 }
 
 # State abbreviation → 2-digit FIPS code
 _STATE_ABBR_TO_FIPS: dict[str, str] = {
-    "AL": "01", "AK": "02", "AZ": "04", "AR": "05", "CA": "06",
-    "CO": "08", "CT": "09", "DE": "10", "DC": "11", "FL": "12",
-    "GA": "13", "HI": "15", "ID": "16", "IL": "17", "IN": "18",
-    "IA": "19", "KS": "20", "KY": "21", "LA": "22", "ME": "23",
-    "MD": "24", "MA": "25", "MI": "26", "MN": "27", "MS": "28",
-    "MO": "29", "MT": "30", "NE": "31", "NV": "32", "NH": "33",
-    "NJ": "34", "NM": "35", "NY": "36", "NC": "37", "ND": "38",
-    "OH": "39", "OK": "40", "OR": "41", "PA": "42", "RI": "44",
-    "SC": "45", "SD": "46", "TN": "47", "TX": "48", "UT": "49",
-    "VT": "50", "VA": "51", "WA": "53", "WV": "54", "WI": "55",
+    "AL": "01",
+    "AK": "02",
+    "AZ": "04",
+    "AR": "05",
+    "CA": "06",
+    "CO": "08",
+    "CT": "09",
+    "DE": "10",
+    "DC": "11",
+    "FL": "12",
+    "GA": "13",
+    "HI": "15",
+    "ID": "16",
+    "IL": "17",
+    "IN": "18",
+    "IA": "19",
+    "KS": "20",
+    "KY": "21",
+    "LA": "22",
+    "ME": "23",
+    "MD": "24",
+    "MA": "25",
+    "MI": "26",
+    "MN": "27",
+    "MS": "28",
+    "MO": "29",
+    "MT": "30",
+    "NE": "31",
+    "NV": "32",
+    "NH": "33",
+    "NJ": "34",
+    "NM": "35",
+    "NY": "36",
+    "NC": "37",
+    "ND": "38",
+    "OH": "39",
+    "OK": "40",
+    "OR": "41",
+    "PA": "42",
+    "RI": "44",
+    "SC": "45",
+    "SD": "46",
+    "TN": "47",
+    "TX": "48",
+    "UT": "49",
+    "VT": "50",
+    "VA": "51",
+    "WA": "53",
+    "WV": "54",
+    "WI": "55",
     "WY": "56",
 }
 
 
 # ── Package-data GeoJSON loaders ──────────────────────────────────────────────
+
 
 @st.cache_data
 def _load_utility_companies_csv() -> list[dict]:
@@ -110,6 +191,7 @@ def _load_states_geojson() -> dict:
 
 
 # ── GISJOIN helpers ───────────────────────────────────────────────────────────
+
 
 def _county_gisjoin(props: dict) -> str:
     return f"G{props['STATEFP']}0{props['COUNTYFP']}0"
@@ -169,7 +251,9 @@ def _bbox_center(features: list[dict]) -> tuple[float, float]:
     return (min(lats) + max(lats)) / 2, (min(lngs) + max(lngs)) / 2
 
 
-def _zoom_for_bbox(lat_min: float, lat_max: float, lng_min: float, lng_max: float) -> int:
+def _zoom_for_bbox(
+    lat_min: float, lat_max: float, lng_min: float, lng_max: float
+) -> int:
     """Estimate an appropriate Leaflet zoom level to fit a geographic bounding box.
 
     streamlit-folium reads ``zoom_start`` from the Folium map object directly
@@ -199,13 +283,34 @@ def _zoom_for_bbox(lat_min: float, lat_max: float, lng_min: float, lng_max: floa
 # ── Static layer styles (defined once at module level) ───────────────────────
 # Using module-level constants avoids re-creating dicts on every fragment rerun
 # and eliminates per-feature conditional branching in the style callbacks.
-_STYLE_SEL   = {"fillColor": "#2196F3", "color": "#1565C0", "weight": 2, "fillOpacity": 0.5}
-_STYLE_UNSEL = {"fillColor": "#ECEFF1", "color": "#78909C", "weight": 1, "fillOpacity": 0.3}
-_STYLE_SEL_SUB   = {"fillColor": "#2196F3", "color": "#1565C0", "weight": 2, "fillOpacity": 0.6}
-_STYLE_UNSEL_SUB = {"fillColor": "#ECEFF1", "color": "#78909C", "weight": 1, "fillOpacity": 0.25}
+_STYLE_SEL = {
+    "fillColor": "#2196F3",
+    "color": "#1565C0",
+    "weight": 2,
+    "fillOpacity": 0.5,
+}
+_STYLE_UNSEL = {
+    "fillColor": "#ECEFF1",
+    "color": "#78909C",
+    "weight": 1,
+    "fillOpacity": 0.3,
+}
+_STYLE_SEL_SUB = {
+    "fillColor": "#2196F3",
+    "color": "#1565C0",
+    "weight": 2,
+    "fillOpacity": 0.6,
+}
+_STYLE_UNSEL_SUB = {
+    "fillColor": "#ECEFF1",
+    "color": "#78909C",
+    "weight": 1,
+    "fillOpacity": 0.25,
+}
 
 
 # ── Public component ──────────────────────────────────────────────────────────
+
 
 def render_map_selector(
     dataset_type: str,
@@ -249,7 +354,7 @@ def render_map_selector(
         st.session_state["_map_puma_sel"] = set(initial_puma_ids)
 
     mode = st.session_state["_map_view_mode"]
-   
+
     if mode == "state":
         _render_state_selection_view(initial_states)
         selected_states = st.session_state.get("_map_selected_states", initial_states)
@@ -270,6 +375,7 @@ def render_map_selector(
 
 
 # ── Internal renderers ────────────────────────────────────────────────────────
+
 
 @st.fragment
 def _render_state_selection_view(current_states: list[str]) -> None:
@@ -296,7 +402,11 @@ def _render_state_selection_view(current_states: list[str]) -> None:
     _vp_key = f"_national_map_vp_v{_map_version}"
     if _vp_key not in st.session_state:
         if selected_set:
-            _sel_init = [f for f in geojson["features"] if f["properties"].get("_abbr", "") in selected_set]
+            _sel_init = [
+                f
+                for f in geojson["features"]
+                if f["properties"].get("_abbr", "") in selected_set
+            ]
             _coords: list[list[float]] = []
             for _f in _sel_init:
                 _coords.extend(_flatten_coords(_f["geometry"]))
@@ -306,7 +416,9 @@ def _render_state_selection_view(current_states: list[str]) -> None:
                 st.session_state[_vp_key] = {
                     "lat": (min(_lats) + max(_lats)) / 2,
                     "lng": (min(_lngs) + max(_lngs)) / 2,
-                    "zoom": _zoom_for_bbox(min(_lats), max(_lats), min(_lngs), max(_lngs)),
+                    "zoom": _zoom_for_bbox(
+                        min(_lats), max(_lats), min(_lngs), max(_lngs)
+                    ),
                 }
             else:
                 st.session_state[_vp_key] = {"lat": 38.5, "lng": -96.0, "zoom": 4}
@@ -314,25 +426,41 @@ def _render_state_selection_view(current_states: list[str]) -> None:
             st.session_state[_vp_key] = {"lat": 38.5, "lng": -96.0, "zoom": 4}
 
     _vp = st.session_state[_vp_key]
-    m = folium.Map(location=[_vp["lat"], _vp["lng"]], zoom_start=_vp["zoom"], tiles="CartoDB positron")
+    m = folium.Map(
+        location=[_vp["lat"], _vp["lng"]],
+        zoom_start=_vp["zoom"],
+        tiles="CartoDB positron",
+    )
 
     # Split into two static-style layers — eliminates 51 per-feature Python
     # callbacks and lets Folium serialize each layer's style once.
-    _sel_feats   = [f for f in geojson["features"] if f["properties"].get("_abbr", "") in selected_set]
-    _unsel_feats = [f for f in geojson["features"] if f["properties"].get("_abbr", "") not in selected_set]
+    _sel_feats = [
+        f
+        for f in geojson["features"]
+        if f["properties"].get("_abbr", "") in selected_set
+    ]
+    _unsel_feats = [
+        f
+        for f in geojson["features"]
+        if f["properties"].get("_abbr", "") not in selected_set
+    ]
     fg = folium.FeatureGroup(name="US States")
     if _unsel_feats:
         folium.GeoJson(
             {"type": "FeatureCollection", "features": _unsel_feats},
             style_function=lambda _: _STYLE_UNSEL,
-            tooltip=folium.GeoJsonTooltip(fields=["name", "_abbr"], aliases=["State:", "Code:"], sticky=False),
+            tooltip=folium.GeoJsonTooltip(
+                fields=["name", "_abbr"], aliases=["State:", "Code:"], sticky=False
+            ),
             smooth_factor=1.5,
         ).add_to(fg)
     if _sel_feats:
         folium.GeoJson(
             {"type": "FeatureCollection", "features": _sel_feats},
             style_function=lambda _: _STYLE_SEL,
-            tooltip=folium.GeoJsonTooltip(fields=["name", "_abbr"], aliases=["State:", "Code:"], sticky=False),
+            tooltip=folium.GeoJsonTooltip(
+                fields=["name", "_abbr"], aliases=["State:", "Code:"], sticky=False
+            ),
             smooth_factor=1.5,
         ).add_to(fg)
 
@@ -349,7 +477,11 @@ def _render_state_selection_view(current_states: list[str]) -> None:
     current_click = map_data.get("last_object_clicked") if map_data else None
     current_tooltip = map_data.get("last_object_clicked_tooltip") if map_data else None
 
-    if current_click and current_tooltip and current_click != st.session_state.get(click_key):
+    if (
+        current_click
+        and current_tooltip
+        and current_click != st.session_state.get(click_key)
+    ):
         st.session_state[click_key] = current_click
         tooltip_str = str(current_tooltip)
         # Match state name from tooltip (longest-first to handle e.g. "West Virginia" vs "Virginia")
@@ -380,11 +512,11 @@ def _render_state_selection_view(current_states: list[str]) -> None:
     if chosen:
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("Select Counties", width='stretch', key="btn_select_counties"):
+            if st.button("Select Counties", width="stretch", key="btn_select_counties"):
                 st.session_state["_map_view_mode"] = "county"
                 st.rerun(scope="app")
         with col2:
-            if st.button("Select PUMAs", width='stretch', key="btn_select_pumas"):
+            if st.button("Select PUMAs", width="stretch", key="btn_select_pumas"):
                 st.session_state["_map_view_mode"] = "puma"
                 st.rerun(scope="app")
 
@@ -411,7 +543,9 @@ def _render_sub_level_view(selected_states: list[str], geo_level: str) -> None:
     st.markdown(f"**Selecting {geo_level.title()}s for: {', '.join(selected_states)}**")
 
     # Resolve state abbreviations → FIPS codes
-    statefps = [_STATE_ABBR_TO_FIPS[s] for s in selected_states if s in _STATE_ABBR_TO_FIPS]
+    statefps = [
+        _STATE_ABBR_TO_FIPS[s] for s in selected_states if s in _STATE_ABBR_TO_FIPS
+    ]
     if not statefps:
         st.error("No valid states selected.")
         return
@@ -461,27 +595,45 @@ def _render_sub_level_view(selected_states: list[str], geo_level: str) -> None:
         zoom = 6
         bounds = None
 
-    m = folium.Map(location=[center_lat, center_lng], zoom_start=zoom, tiles="CartoDB positron")
+    m = folium.Map(
+        location=[center_lat, center_lng], zoom_start=zoom, tiles="CartoDB positron"
+    )
     if bounds:
         m.fit_bounds(bounds)  # applied when streamlit-folium does execute JS
 
     # Split into two static-style layers — eliminates per-feature Python callbacks
     # across potentially thousands of county/PUMA features.
-    _sel_feats   = [f for f in filtered["features"] if f["properties"].get("_gisjoin", "") in selected_set]
-    _unsel_feats = [f for f in filtered["features"] if f["properties"].get("_gisjoin", "") not in selected_set]
+    _sel_feats = [
+        f
+        for f in filtered["features"]
+        if f["properties"].get("_gisjoin", "") in selected_set
+    ]
+    _unsel_feats = [
+        f
+        for f in filtered["features"]
+        if f["properties"].get("_gisjoin", "") not in selected_set
+    ]
     fg = folium.FeatureGroup(name=geo_level.title())
     if _unsel_feats:
         folium.GeoJson(
             {"type": "FeatureCollection", "features": _unsel_feats},
             style_function=lambda _: _STYLE_UNSEL_SUB,
-            tooltip=folium.GeoJsonTooltip(fields=[name_field, "_gisjoin"], aliases=[name_alias, "GISJOIN:"], sticky=False),
+            tooltip=folium.GeoJsonTooltip(
+                fields=[name_field, "_gisjoin"],
+                aliases=[name_alias, "GISJOIN:"],
+                sticky=False,
+            ),
             smooth_factor=1.5,
         ).add_to(fg)
     if _sel_feats:
         folium.GeoJson(
             {"type": "FeatureCollection", "features": _sel_feats},
             style_function=lambda _: _STYLE_SEL_SUB,
-            tooltip=folium.GeoJsonTooltip(fields=[name_field, "_gisjoin"], aliases=[name_alias, "GISJOIN:"], sticky=False),
+            tooltip=folium.GeoJsonTooltip(
+                fields=[name_field, "_gisjoin"],
+                aliases=[name_alias, "GISJOIN:"],
+                sticky=False,
+            ),
             smooth_factor=1.5,
         ).add_to(fg)
 
@@ -499,7 +651,11 @@ def _render_sub_level_view(selected_states: list[str], geo_level: str) -> None:
     current_click = map_data.get("last_object_clicked") if map_data else None
     current_tooltip = map_data.get("last_object_clicked_tooltip") if map_data else None
 
-    if current_click and current_tooltip and current_click != st.session_state.get(click_key):
+    if (
+        current_click
+        and current_tooltip
+        and current_click != st.session_state.get(click_key)
+    ):
         st.session_state[click_key] = current_click
         match = re.search(r"(G\d{7,8})", str(current_tooltip))
         if match:
@@ -518,7 +674,9 @@ def _render_sub_level_view(selected_states: list[str], geo_level: str) -> None:
         if selected_set:
             preview = ", ".join(sorted(selected_set)[:5])
             suffix = "…" if len(selected_set) > 5 else ""
-            st.caption(f"{len(selected_set)} {geo_level}(s) selected: {preview}{suffix}")
+            st.caption(
+                f"{len(selected_set)} {geo_level}(s) selected: {preview}{suffix}"
+            )
         else:
             st.caption(f"Click {geo_level} regions on the map to select them.")
     with col2:
@@ -529,6 +687,7 @@ def _render_sub_level_view(selected_states: list[str], geo_level: str) -> None:
 
 
 # ── Utility-based county selector ─────────────────────────────────────────────
+
 
 def render_utility_map_selector() -> dict:
     """
@@ -563,19 +722,26 @@ def render_utility_map_selector() -> dict:
     )
 
     if not search_query:
-        return {"selected_county_ids": list(st.session_state.get("_utility_map_county_sel", set()))}
+        return {
+            "selected_county_ids": list(
+                st.session_state.get("_utility_map_county_sel", set())
+            )
+        }
 
     q = search_query.lower()
     matches = [c for c in companies if q in c.get("label", "").lower()]
     if not matches:
         words = q.split()
         matches = [
-            c for c in companies
-            if all(w in c.get("label", "").lower() for w in words)
+            c for c in companies if all(w in c.get("label", "").lower() for w in words)
         ]
     if not matches:
         st.caption("No matching utilities found. Try a different search term.")
-        return {"selected_county_ids": list(st.session_state.get("_utility_map_county_sel", set()))}
+        return {
+            "selected_county_ids": list(
+                st.session_state.get("_utility_map_county_sel", set())
+            )
+        }
 
     match_labels = [c["label"] for c in matches[:50]]
     selected_label: str = st.selectbox(
@@ -585,22 +751,40 @@ def render_utility_map_selector() -> dict:
     )
 
     if selected_label == "— select a utility —":
-        return {"selected_county_ids": list(st.session_state.get("_utility_map_county_sel", set()))}
+        return {
+            "selected_county_ids": list(
+                st.session_state.get("_utility_map_county_sel", set())
+            )
+        }
 
     selected_company = next((c for c in matches if c["label"] == selected_label), None)
-    eia_id = selected_company.get("eia_utility_id", "").strip() if selected_company else ""
+    eia_id = (
+        selected_company.get("eia_utility_id", "").strip() if selected_company else ""
+    )
 
     if not eia_id:
         st.warning("No EIA utility ID found for this utility in the local dataset.")
-        return {"selected_county_ids": list(st.session_state.get("_utility_map_county_sel", set()))}
+        return {
+            "selected_county_ids": list(
+                st.session_state.get("_utility_map_county_sel", set())
+            )
+        }
 
     # Look up counties from eia_to_county.csv
     eia_county_rows = _load_eia_to_county_csv()
-    matched_rows = [r for r in eia_county_rows if r.get("eia_utility_id", "").strip() == eia_id]
+    matched_rows = [
+        r for r in eia_county_rows if r.get("eia_utility_id", "").strip() == eia_id
+    ]
 
     if not matched_rows:
-        st.info("No counties found for this utility in the EIA service territory dataset.")
-        return {"selected_county_ids": list(st.session_state.get("_utility_map_county_sel", set()))}
+        st.info(
+            "No counties found for this utility in the EIA service territory dataset."
+        )
+        return {
+            "selected_county_ids": list(
+                st.session_state.get("_utility_map_county_sel", set())
+            )
+        }
 
     # Build GISJOIN IDs and collect state FIPS codes
     matched_gisjoins: set[str] = set()
@@ -614,7 +798,11 @@ def render_utility_map_selector() -> dict:
 
     if not matched_gisjoins:
         st.info("Could not resolve county boundaries for this utility.")
-        return {"selected_county_ids": list(st.session_state.get("_utility_map_county_sel", set()))}
+        return {
+            "selected_county_ids": list(
+                st.session_state.get("_utility_map_county_sel", set())
+            )
+        }
 
     # When the selected utility changes, reset the county selection to matched set
     sel_key = "_utility_map_county_sel"
@@ -647,14 +835,18 @@ def _render_utility_county_map(statefps: list[str], matched_gisjoins: set[str]) 
     selected_set: set[str] = st.session_state[sel_key]
 
     raw_geojson = _load_county_geojson()
-    filtered = _filter_features_by_states(raw_geojson, statefps, "STATEFP", _county_gisjoin)
+    filtered = _filter_features_by_states(
+        raw_geojson, statefps, "STATEFP", _county_gisjoin
+    )
 
     if not filtered["features"]:
         st.warning("No county boundaries found for this utility's service territory.")
         return
 
     center_lat, center_lng = _bbox_center(filtered["features"])
-    m = folium.Map(location=[center_lat, center_lng], zoom_start=5, tiles="CartoDB positron")
+    m = folium.Map(
+        location=[center_lat, center_lng], zoom_start=5, tiles="CartoDB positron"
+    )
 
     all_coords: list[list[float]] = []
     for feat in filtered["features"]:
@@ -667,8 +859,18 @@ def _render_utility_county_map(statefps: list[str], matched_gisjoins: set[str]) 
     def _style(feature):
         gj = feature["properties"].get("_gisjoin", "")
         if gj in selected_set:
-            return {"fillColor": "#2196F3", "color": "#1565C0", "weight": 2, "fillOpacity": 0.6}
-        return {"fillColor": "#ECEFF1", "color": "#78909C", "weight": 1, "fillOpacity": 0.25}
+            return {
+                "fillColor": "#2196F3",
+                "color": "#1565C0",
+                "weight": 2,
+                "fillOpacity": 0.6,
+            }
+        return {
+            "fillColor": "#ECEFF1",
+            "color": "#78909C",
+            "weight": 1,
+            "fillOpacity": 0.25,
+        }
 
     fg = folium.FeatureGroup(name="Counties")
     folium.GeoJson(
@@ -694,7 +896,11 @@ def _render_utility_county_map(statefps: list[str], matched_gisjoins: set[str]) 
     current_click = map_data.get("last_object_clicked") if map_data else None
     current_tooltip = map_data.get("last_object_clicked_tooltip") if map_data else None
 
-    if current_click and current_tooltip and current_click != st.session_state.get(click_key):
+    if (
+        current_click
+        and current_tooltip
+        and current_click != st.session_state.get(click_key)
+    ):
         st.session_state[click_key] = current_click
         match = re.search(r"(G\d{7,8})", str(current_tooltip))
         if match:

@@ -4,19 +4,67 @@ Geographic utilities for BuildStock TOU Calculator.
 Provides helpers for parsing, validating, and querying geographic identifiers
 (states, counties, PUMAs, census tracts) and utility company lists from URDB.
 """
+
 from __future__ import annotations
 import requests
 from typing import Tuple
 
 # Canonical set of US state abbreviations (50 states + DC + territories used in BuildStock)
-_US_STATES: frozenset[str] = frozenset({
-    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
-    "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
-    "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
-    "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
-    "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
-    "DC",
-})
+_US_STATES: frozenset[str] = frozenset(
+    {
+        "AL",
+        "AK",
+        "AZ",
+        "AR",
+        "CA",
+        "CO",
+        "CT",
+        "DE",
+        "FL",
+        "GA",
+        "HI",
+        "ID",
+        "IL",
+        "IN",
+        "IA",
+        "KS",
+        "KY",
+        "LA",
+        "ME",
+        "MD",
+        "MA",
+        "MI",
+        "MN",
+        "MS",
+        "MO",
+        "MT",
+        "NE",
+        "NV",
+        "NH",
+        "NJ",
+        "NM",
+        "NY",
+        "NC",
+        "ND",
+        "OH",
+        "OK",
+        "OR",
+        "PA",
+        "RI",
+        "SC",
+        "SD",
+        "TN",
+        "TX",
+        "UT",
+        "VT",
+        "VA",
+        "WA",
+        "WV",
+        "WI",
+        "WY",
+        "DC",
+    }
+)
 
 # Geo levels supported per dataset type
 _SUPPORTED_GEO_LEVELS: dict[str, set[str]] = {
@@ -139,7 +187,9 @@ def validate_geo_ids(
     return valid, invalid
 
 
-def get_utility_list(api_key: str, state: str, sector: str = "Residential") -> list[dict]:
+def get_utility_list(
+    api_key: str, state: str, sector: str = "Residential"
+) -> list[dict]:
     """
     Fetch a list of utility companies serving a given state from URDB.
 

@@ -1,4 +1,5 @@
 """Pure helper functions for the app sidebar — no Streamlit imports."""
+
 from __future__ import annotations
 from pathlib import Path
 
@@ -11,9 +12,7 @@ def list_projects(output_dir: Path) -> list[str]:
     projects_dir = output_dir / "projects"
     if not projects_dir.is_dir():
         return []
-    return sorted(
-        p.name for p in projects_dir.iterdir() if p.is_dir()
-    )
+    return sorted(p.name for p in projects_dir.iterdir() if p.is_dir())
 
 
 def default_project_name(output_dir: Path) -> str:
@@ -37,6 +36,7 @@ def browse_folder() -> str | None:
     try:
         import tkinter as tk
         from tkinter import filedialog
+
         root = tk.Tk()
         root.withdraw()
         root.wm_attributes("-topmost", True)

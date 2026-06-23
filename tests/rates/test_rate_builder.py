@@ -2,6 +2,7 @@
 Tests for UrdbRateBuilder fixed-charge units, TOU demand, and flat (monthly)
 demand support, including conversion to PySAM ElectricityRates parameters.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -23,6 +24,7 @@ def _base_builder() -> UrdbRateBuilder:
 
 
 # ── Fixed charge units ────────────────────────────────────────────────────────
+
 
 def test_fixed_charge_monthly_passthrough():
     rate = _base_builder().fixed_charge(12.5, FixedChargeUnits.MONTHLY).to_pysam_dict()
@@ -54,6 +56,7 @@ def test_fixed_charge_rejects_unknown_units():
 
 # ── TOU energy periods ────────────────────────────────────────────────────────
 
+
 def test_multi_period_energy_tou_mat():
     builder = (
         UrdbRateBuilder(validate_pysam=False)
@@ -74,7 +77,11 @@ def test_multi_period_energy_tou_mat():
     params = UrdbRateBuilder.prepare_for_pysam(builder.to_pysam_dict())
 
     rates_by_period = {row[0]: row[4] for row in params["ur_ec_tou_mat"]}
-    assert rates_by_period == {1: pytest.approx(0.08), 2: pytest.approx(0.15), 3: pytest.approx(0.30)}
+    assert rates_by_period == {
+        1: pytest.approx(0.08),
+        2: pytest.approx(0.15),
+        3: pytest.approx(0.30),
+    }
     # PySAM schedules are 1-based
     assert params["ur_ec_sched_weekday"][6][13] == 2
     assert params["ur_ec_sched_weekday"][6][18] == 3
@@ -82,6 +89,7 @@ def test_multi_period_energy_tou_mat():
 
 
 # ── TOU demand charges ────────────────────────────────────────────────────────
+
 
 def test_tou_demand_periods_and_schedules():
     builder = (
@@ -101,7 +109,11 @@ def test_tou_demand_periods_and_schedules():
 
     assert params["ur_dc_enable"] == 1
     demand_rates = {row[0]: row[3] for row in params["ur_dc_tou_mat"]}
-    assert demand_rates == {1: pytest.approx(0.0), 2: pytest.approx(12.0), 3: pytest.approx(20.0)}
+    assert demand_rates == {
+        1: pytest.approx(0.0),
+        2: pytest.approx(12.0),
+        3: pytest.approx(20.0),
+    }
     assert params["ur_dc_sched_weekday"][0][17] == 2
     assert params["ur_dc_sched_weekday"][11][17] == 3
     assert params["ur_dc_sched_weekday"][0][0] == 1
@@ -111,10 +123,11 @@ def test_tou_demand_periods_and_schedules():
 
 # ── Flat (monthly) demand charges ─────────────────────────────────────────────
 
+
 def test_flat_demand_only():
     builder = _base_builder()
-    builder.add_flat_demand_tier(0, None, 15.0)   # summer
-    builder.add_flat_demand_tier(1, None, 0.0)    # rest of year
+    builder.add_flat_demand_tier(0, None, 15.0)  # summer
+    builder.add_flat_demand_tier(1, None, 0.0)  # rest of year
     months = [1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1]  # Jun-Sep = period 0
     builder.set_flat_demand_months(months)
 
@@ -122,8 +135,8 @@ def test_flat_demand_only():
 
     assert params["ur_dc_enable"] == 1
     flat_by_month = {row[0]: row[3] for row in params["ur_dc_flat_mat"]}
-    assert flat_by_month[5] == pytest.approx(15.0)   # June (0-based)
-    assert flat_by_month[0] == pytest.approx(0.0)    # January
+    assert flat_by_month[5] == pytest.approx(15.0)  # June (0-based)
+    assert flat_by_month[0] == pytest.approx(0.0)  # January
     # PySAM fills an empty TOU demand structure when only flat demand is present
     assert params["ur_dc_tou_mat"][0][3] == 0
 
