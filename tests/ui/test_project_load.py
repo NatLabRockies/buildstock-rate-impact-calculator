@@ -5,7 +5,10 @@ import json
 from pathlib import Path
 import pytest
 
-from buildstock_rate_impact_calculator.ui.project_io import load_project
+from buildstock_rate_impact_calculator.ui.project_io import (
+    load_project,
+    state_abbrs_from_geo_ids,
+)
 from buildstock_rate_impact_calculator.ui.state import AppState
 
 
@@ -179,3 +182,114 @@ def test_load_project_missing_rate_sets_flag(tmp_path):
 
     assert "My Missing Rate" in missing
     assert "My Missing Rate" in session.get("_missing_rates", [])
+
+
+def test_state_abbrs_from_geo_ids_county_and_puma():
+    """state_abbrs_from_geo_ids derives unique sorted state abbrs from GISJOIN ids."""
+    # G02… = AK, G08… = CO
+    abbrs = state_abbrs_from_geo_ids(
+        county_ids=["G0200130", "G0800690", "G0800710"],
+        puma_ids=["G02000101"],
+    )
+    assert abbrs == ["AK", "CO"]
+
+
+def test_state_abbrs_from_geo_ids_ignores_unparseable():
+    """Ids that cannot be parsed are silently skipped."""
+    abbrs = state_abbrs_from_geo_ids(
+        county_ids=["G0800690", "", "bogus", "G99"],
+        puma_ids=None,
+    )
+    assert abbrs == ["CO"]
+
+
+def test_load_project_derives_states_from_county_ids(tmp_path):
+    """When the saved project has county_ids but no selected_states, the map
+    session state is populated with derived state abbreviations so the
+    national choropleth still highlights the relevant states."""
+    config = {
+        "dataset_type": "comstock",
+        "release": "2025_release_3",
+        "selected_upgrades": [0],
+        "active_filters": {},
+        "geo_level": "county",
+        "selected_geo_ids": [],
+        "selected_states": [],  # intentionally empty
+        "selected_county_ids": ["G0800690", "G0200130"],  # CO, AK
+        "selected_puma_ids": [],
+        "rate_assignments": {},
+        "fuel_rate_assignments": {},
+        "rate_label_map": {},
+        "urdb_api_key": "",
+        "output_dir": str(tmp_path),
+        "project_name": "Test",
+    }
+    project_dir = _make_project(tmp_path, config)
+
+    state = AppState()
+    session: dict = {}
+    load_project(project_dir, state, api_key="", session_state=session)
+
+    assert session["_map_selected_states"] == ["AK", "CO"]
+    assert session["_map_states_sel"] == {"AK", "CO"}
+    assert session["_map_county_sel"] == {"G0800690", "G0200130"}
+    assert session["_map_view_mode"] == "county"
+
+
+def test_load_project_derives_states_from_puma_ids(tmp_path):
+    """PUMA-only selections also populate the map state set."""
+    config = {
+        "dataset_type": "comstock",
+        "release": "2025_release_3",
+        "selected_upgrades": [0],
+        "active_filters": {},
+        "geo_level": "puma",
+        "selected_geo_ids": [],
+        "selected_states": [],
+        "selected_county_ids": [],
+        "selected_puma_ids": ["G02000101", "G08000803"],  # AK, CO
+        "rate_assignments": {},
+        "fuel_rate_assignments": {},
+        "rate_label_map": {},
+        "urdb_api_key": "",
+        "output_dir": str(tmp_path),
+        "project_name": "Test",
+    }
+    project_dir = _make_project(tmp_path, config)
+
+    state = AppState()
+    session: dict = {}
+    load_project(project_dir, state, api_key="", session_state=session)
+
+    assert session["_map_selected_states"] == ["AK", "CO"]
+    assert session["_map_states_sel"] == {"AK", "CO"}
+    assert session["_map_view_mode"] == "puma"
+
+
+def test_load_project_merges_explicit_and_derived_states(tmp_path):
+    """Explicit selected_states are merged with states derived from county_ids."""
+    config = {
+        "dataset_type": "comstock",
+        "release": "2025_release_3",
+        "selected_upgrades": [0],
+        "active_filters": {},
+        "geo_level": "county",
+        "selected_geo_ids": [],
+        "selected_states": ["NY"],
+        "selected_county_ids": ["G0800690"],  # CO
+        "selected_puma_ids": [],
+        "rate_assignments": {},
+        "fuel_rate_assignments": {},
+        "rate_label_map": {},
+        "urdb_api_key": "",
+        "output_dir": str(tmp_path),
+        "project_name": "Test",
+    }
+    project_dir = _make_project(tmp_path, config)
+
+    state = AppState()
+    session: dict = {}
+    load_project(project_dir, state, api_key="", session_state=session)
+
+    assert session["_map_selected_states"] == ["CO", "NY"]
+    assert session["_map_states_sel"] == {"CO", "NY"}

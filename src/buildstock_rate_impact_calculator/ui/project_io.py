@@ -20,10 +20,31 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from buildstock_rate_impact_calculator.data.buildstock_manager import BuildStockDataManager
 from buildstock_rate_impact_calculator.rates.urdb_client import URDBClient
 
 if TYPE_CHECKING:
     from buildstock_rate_impact_calculator.ui.state import AppState
+
+
+def state_abbrs_from_geo_ids(
+    county_ids: list[str] | None = None,
+    puma_ids: list[str] | None = None,
+) -> list[str]:
+    """Return sorted unique USPS state abbreviations implied by GISJOIN ids.
+
+    Each county/PUMA GISJOIN id (e.g. ``G0800690``, ``G08000803``) embeds a
+    2-digit state FIPS code at positions ``[1:3]``.  This helper extracts that
+    FIPS code via :meth:`BuildStockDataManager.state_for_gisjoin` and returns
+    the deduplicated set of state abbreviations as a sorted list.  Ids that
+    cannot be parsed are silently skipped.
+    """
+    abbrs: set[str] = set()
+    for geo_id in list(county_ids or []) + list(puma_ids or []):
+        abbr = BuildStockDataManager.state_for_gisjoin(geo_id)
+        if abbr:
+            abbrs.add(abbr)
+    return sorted(abbrs)
 
 
 def rate_to_filename(rate_dict: dict) -> str:
@@ -226,8 +247,20 @@ def load_project(
     #    selections instead of showing whatever was previously on screen.
     #    Keys are read by render_map_selector / _render_state_selection_view /
     #    _render_sub_level_view in map_selector.py.
-    session_state["_map_states_sel"] = set(app_state.selected_states)
-    session_state["_map_selected_states"] = list(app_state.selected_states)
+    #
+    #    When the saved project has county/PUMA selections but no (or only
+    #    partial) explicit ``selected_states``, derive the implied state
+    #    abbreviations from the GISJOIN ids so the national choropleth shows
+    #    the relevant states highlighted when the user returns to the state
+    #    view.
+    derived_states = state_abbrs_from_geo_ids(
+        county_ids=app_state.selected_county_ids,
+        puma_ids=app_state.selected_puma_ids,
+    )
+    merged_states = sorted(set(app_state.selected_states) | set(derived_states))
+
+    session_state["_map_states_sel"] = set(merged_states)
+    session_state["_map_selected_states"] = list(merged_states)
     session_state["_map_county_sel"] = set(app_state.selected_county_ids)
     session_state["_map_puma_sel"] = set(app_state.selected_puma_ids)
     # Choose the most informative view mode automatically:
