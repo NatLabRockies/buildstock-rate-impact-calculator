@@ -13,6 +13,7 @@ Run with::
 
 The ``-s`` flag lets timing output reach the terminal.
 """
+
 from __future__ import annotations
 
 import time
@@ -24,7 +25,6 @@ import pytest
 
 from buildstock_rate_impact_calculator.data.buildstock_manager import (
     BuildStockDataManager,
-    DatasetConfig,
     _OEDI_HTTPS_BASE,
     _OEDI_S3_BASE,
 )
@@ -65,6 +65,7 @@ def _make_mgr(tmp_path: Path, **kwargs: Any) -> BuildStockDataManager:
 # ===========================================================================
 # Unit tests — DatasetConfig
 # ===========================================================================
+
 
 class TestDatasetConfig:
     def test_all_configs_present(self) -> None:
@@ -111,6 +112,7 @@ class TestDatasetConfig:
 # Unit tests — _to_s3_uri
 # ===========================================================================
 
+
 class TestToS3Uri:
     def test_converts_oedi_https_to_s3(self) -> None:
         https = f"{_OEDI_HTTPS_BASE}some/path/file.parquet"
@@ -129,6 +131,7 @@ class TestToS3Uri:
 # ===========================================================================
 # Unit tests — __init__ / config validation
 # ===========================================================================
+
 
 class TestInit:
     def test_valid_resstock_2025(self, tmp_path: Path) -> None:
@@ -172,6 +175,7 @@ class TestInit:
 # ===========================================================================
 # Unit tests — URI construction
 # ===========================================================================
+
 
 class TestMetadataUriConstruction:
     def test_default_metadata_uri_resstock_2025(self, tmp_path: Path) -> None:
@@ -239,6 +243,7 @@ class TestLoadProfileUriConstruction:
 # Unit tests — column helpers
 # ===========================================================================
 
+
 class TestDeduplicateColumns:
     def test_adds_required_columns(self, tmp_path: Path) -> None:
         mgr = _make_mgr(tmp_path)
@@ -290,13 +295,15 @@ class TestGetFuelColumns:
 # Unit tests — DataFrame helpers (no network)
 # ===========================================================================
 
+
 @pytest.fixture()
 def sample_metadata() -> pl.DataFrame:
     return pl.DataFrame(
         {
             "bldg_id": [1, 2, 3, 4, 5],
             "in.state": ["CO", "CO", "AZ", "AZ", "TX"],
-            "in.geometry_building_type_acs": ["Single-Family Detached"] * 3 + ["Mobile Home"] * 2,
+            "in.geometry_building_type_acs": ["Single-Family Detached"] * 3
+            + ["Mobile Home"] * 2,
             "out.some_col": [1.0, 2.0, 3.0, 4.0, 5.0],
         }
     )
@@ -344,17 +351,13 @@ class TestGetColumnUniqueValues:
 
 
 class TestFilterMetadata:
-    def test_scalar_filter(
-        self, tmp_path: Path, sample_metadata: pl.DataFrame
-    ) -> None:
+    def test_scalar_filter(self, tmp_path: Path, sample_metadata: pl.DataFrame) -> None:
         mgr = _make_mgr(tmp_path)
         result = mgr.filter_metadata(sample_metadata, {"in.state": "CO"})
         assert len(result) == 2
         assert result["in.state"].unique().to_list() == ["CO"]
 
-    def test_list_filter(
-        self, tmp_path: Path, sample_metadata: pl.DataFrame
-    ) -> None:
+    def test_list_filter(self, tmp_path: Path, sample_metadata: pl.DataFrame) -> None:
         mgr = _make_mgr(tmp_path)
         result = mgr.filter_metadata(sample_metadata, {"in.state": ["CO", "AZ"]})
         assert len(result) == 4
@@ -381,7 +384,9 @@ class TestFilterMetadata:
 
 
 class TestStateMappingAndBuildingState:
-    def test_update_state_mapping(self, tmp_path: Path, sample_metadata: pl.DataFrame) -> None:
+    def test_update_state_mapping(
+        self, tmp_path: Path, sample_metadata: pl.DataFrame
+    ) -> None:
         mgr = _make_mgr(tmp_path)
         mgr._update_state_mapping(sample_metadata)
         assert mgr.get_building_state(1) == "CO"
@@ -405,6 +410,7 @@ class TestStateMappingAndBuildingState:
 # Unit tests — get_upgrade_applicability
 # ===========================================================================
 
+
 class TestGetUpgradeApplicability:
     """Tests for the get_upgrade_applicability method (no network)."""
 
@@ -427,9 +433,7 @@ class TestGetUpgradeApplicability:
         building_ids = [10, 20, 30]
 
         # Simulate upgrade metadata returning applicability for only 2 of 3 buildings
-        fake_df = pl.DataFrame(
-            {"bldg_id": [10, 20], "applicability": [True, False]}
-        )
+        fake_df = pl.DataFrame({"bldg_id": [10, 20], "applicability": [True, False]})
 
         def _fake_scan(*args: Any, **kwargs: Any):
             return fake_df.lazy()
@@ -445,9 +449,7 @@ class TestGetUpgradeApplicability:
         mgr = _make_mgr(tmp_path)
         building_ids = [1, 2, 99]  # 99 not in upgrade metadata
 
-        fake_df = pl.DataFrame(
-            {"bldg_id": [1, 2], "applicability": [True, True]}
-        )
+        fake_df = pl.DataFrame({"bldg_id": [1, 2], "applicability": [True, True]})
 
         def _fake_scan(*args: Any, **kwargs: Any):
             return fake_df.lazy()
@@ -466,7 +468,10 @@ class TestGetUpgradeApplicability:
         # Use Int32 0/1 to verify casting to bool
         fake_df = pl.DataFrame(
             {"bldg_id": [1, 2], "upgrade.duct_leakage_and_insulation": [1, None]},
-            schema={"bldg_id": pl.Int32, "upgrade.duct_leakage_and_insulation": pl.Int32},
+            schema={
+                "bldg_id": pl.Int32,
+                "upgrade.duct_leakage_and_insulation": pl.Int32,
+            },
         )
 
         def _fake_scan(*args: Any, **kwargs: Any):
@@ -525,7 +530,12 @@ class TestGetUpgradeApplicability:
         captured_uris: list[str] = []
         expected_uri = mgr.get_metadata_uri_for_upgrade(3)
 
-        fake_df = pl.DataFrame({"bldg_id": pl.Series([], dtype=pl.Int32), "applicability": pl.Series([], dtype=pl.Boolean)})
+        fake_df = pl.DataFrame(
+            {
+                "bldg_id": pl.Series([], dtype=pl.Int32),
+                "applicability": pl.Series([], dtype=pl.Boolean),
+            }
+        )
 
         def _fake_scan(uri: str, **kwargs: Any):
             captured_uris.append(uri)
@@ -534,6 +544,51 @@ class TestGetUpgradeApplicability:
         monkeypatch.setattr(pl, "scan_parquet", _fake_scan)
         mgr.get_upgrade_applicability(3, [1, 2])
         assert captured_uris[0] == expected_uri
+
+
+# ===========================================================================
+# Unit tests — get_dataset_weight
+# ===========================================================================
+
+
+class TestGetDatasetWeight:
+    """Unit tests for BuildStockDataManager.get_dataset_weight (no network)."""
+
+    def test_get_dataset_weight_resstock_returns_scalar(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mgr = _make_mgr(tmp_path)
+        fake_lf = pl.DataFrame({"weight": [188.0]}).lazy()
+
+        def _fake_scan(*args: Any, **kwargs: Any):
+            return fake_lf
+
+        monkeypatch.setattr(pl, "scan_parquet", _fake_scan)
+        weight = mgr.get_dataset_weight()
+        assert weight == 188.0
+        assert isinstance(weight, float)
+
+    def test_get_dataset_weight_comstock_returns_none(self, tmp_path: Path) -> None:
+        mgr = _make_mgr(tmp_path, dataset_type="comstock", release="2024_release_2")
+        assert mgr.get_dataset_weight() is None
+
+    def test_get_dataset_weight_cached_after_first_call(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mgr = _make_mgr(tmp_path)
+        call_count = {"n": 0}
+        fake_lf = pl.DataFrame({"weight": [42.5]}).lazy()
+
+        def _fake_scan(*args: Any, **kwargs: Any):
+            call_count["n"] += 1
+            return fake_lf
+
+        monkeypatch.setattr(pl, "scan_parquet", _fake_scan)
+        first = mgr.get_dataset_weight()
+        second = mgr.get_dataset_weight()
+        assert first == 42.5
+        assert second == 42.5
+        assert call_count["n"] == 1
 
 
 # ===========================================================================
@@ -621,7 +676,7 @@ class TestIntegrationApplicability:
         n_app = sum(1 for v in result.values() if v)
         print(
             f"\n[Applicability] upgrade=1  sample={len(sample_ids):,}  "
-            f"applicable={n_app:,} ({n_app/len(sample_ids)*100:.1f}%)  "
+            f"applicable={n_app:,} ({n_app / len(sample_ids) * 100:.1f}%)  "
             f"elapsed={elapsed:.2f}s"
         )
         assert elapsed < 30, "Applicability fetch took unexpectedly long"
@@ -696,7 +751,9 @@ class TestIntegrationTimeseriesDownload:
     ) -> None:
         """Download 10 building timeseries, validate structure, report per-file timing."""
         building_ids = integration_mgr.get_building_ids()[:_N_BUILDINGS]
-        assert len(building_ids) == _N_BUILDINGS, "Need at least 10 buildings in metadata"
+        assert len(building_ids) == _N_BUILDINGS, (
+            "Need at least 10 buildings in metadata"
+        )
 
         ts_dir = tmp_path / "timeseries"
         progress_log: list[tuple[int, float]] = []
