@@ -86,7 +86,7 @@ def render_results_page(app_state: AppState) -> None:
 
     from buildstock_rate_impact_calculator.billing.results import (
         summarize_bills,
-        compute_bill_diff,
+        compute_bill_savings,
         format_for_export,
     )
     from buildstock_rate_impact_calculator.ui.components.charts import (
@@ -94,13 +94,19 @@ def render_results_page(app_state: AppState) -> None:
         render_bill_distribution,
     )
 
+    # Dataset type drives which aggregation columns the summary frame
+    # carries (ResStock: mean/median/total_annual_bill + units; ComStock:
+    # mean/median_per_sqft + total_annual_bill + total_sqft + units). The
+    # full UI rework lands in phase 6 — phase 5 only adapts call sites.
+    ds_type = (app_state.dataset_type or "").lower()
+
     st.divider()
 
     # ── Summary table ─────────────────────────────────────────────────────────
     st.subheader("Bill Summary")
     summary = None
     try:
-        summary = summarize_bills(df, group_by=group_col)
+        summary = summarize_bills(df, dataset_type=ds_type, group_by=group_col)
         # Add scenario labels
         summary = summary.with_columns(
             pl.col("upgrade")
@@ -113,12 +119,21 @@ def render_results_page(app_state: AppState) -> None:
         display_cols = ["scenario", "upgrade"]
         if group_col:
             display_cols = [group_col] + display_cols
-        display_cols += [
-            "mean_annual_bill",
-            "median_annual_bill",
-            "total_annual_bill",
-            "count",
-        ]
+        if ds_type == "comstock":
+            display_cols += [
+                "mean_per_sqft",
+                "median_per_sqft",
+                "total_annual_bill",
+                "total_sqft",
+                "units",
+            ]
+        else:
+            display_cols += [
+                "mean_annual_bill",
+                "median_annual_bill",
+                "total_annual_bill",
+                "units",
+            ]
         # Include fuel/total bill summaries if present
         for extra in (
             "mean_natural_gas_bill",
@@ -190,7 +205,11 @@ def render_results_page(app_state: AppState) -> None:
     st.subheader("Mean Annual Bill by Scenario")
     if summary is not None:
         try:
-            chart = render_bill_comparison_bar(summary, group_col=group_col)
+            # ComStock means are reported on $/ft², ResStock on whole-building $.
+            bill_col = "mean_per_sqft" if ds_type == "comstock" else "mean_annual_bill"
+            chart = render_bill_comparison_bar(
+                summary, group_col=group_col, bill_col=bill_col
+            )
             st.altair_chart(chart, width="stretch")
         except Exception as exc:
             st.error(f"Chart error: {exc}")
@@ -212,7 +231,7 @@ def render_results_page(app_state: AppState) -> None:
     if len(upgrades) > 1 and 0 in upgrades:
         st.subheader("Bill Difference vs Baseline")
         try:
-            diff_df = compute_bill_diff(df, baseline_upgrade=0)
+            diff_df = compute_bill_savings(df, baseline_upgrade=0)
             diff_summary = (
                 diff_df.group_by(
                     ["upgrade", "scenario"]
@@ -221,8 +240,8 @@ def render_results_page(app_state: AppState) -> None:
                 )
                 .agg(
                     [
-                        pl.col("bill_diff").mean().alias("mean_bill_diff"),
-                        pl.col("bill_diff").median().alias("median_bill_diff"),
+                        pl.col("bill_savings").mean().alias("mean_bill_savings"),
+                        pl.col("bill_savings").median().alias("median_bill_savings"),
                         pl.col("bldg_id").count().alias("count"),
                     ]
                 )
@@ -240,16 +259,19 @@ def render_results_page(app_state: AppState) -> None:
                 .mark_bar()
                 .encode(
                     x=alt.X("upgrade:N", title="Upgrade Scenario"),
-                    y=alt.Y("mean_bill_diff:Q", title="Mean Bill Difference ($)"),
+                    y=alt.Y("mean_bill_savings:Q", title="Mean Bill Savings ($)"),
+                    # Positive bill_savings = baseline > upgrade = savings (green).
                     color=alt.condition(
-                        alt.datum.mean_bill_diff < 0,
+                        alt.datum.mean_bill_savings > 0,
                         alt.value("#4CAF50"),  # green for savings
                         alt.value("#F44336"),  # red for increases
                     ),
                     tooltip=[
                         alt.Tooltip("upgrade:N", title="Upgrade"),
                         alt.Tooltip(
-                            "mean_bill_diff:Q", title="Mean Diff ($)", format="$.2f"
+                            "mean_bill_savings:Q",
+                            title="Mean Savings ($)",
+                            format="$.2f",
                         ),
                         alt.Tooltip("count:Q", title="Buildings"),
                     ],
