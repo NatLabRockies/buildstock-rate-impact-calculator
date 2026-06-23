@@ -1,9 +1,9 @@
 """
 Phase 1 tests for AppState directory structure and config key changes.
 """
+
 from __future__ import annotations
 from pathlib import Path
-import pytest
 
 from buildstock_rate_impact_calculator.ui.state import AppState
 
@@ -28,7 +28,9 @@ def test_to_config_dict_excludes_rate_library():
     """rate_library and fuel_rate_library must NOT appear in to_config_dict output."""
     state = AppState()
     state.rate_library = {"My Rate": {"name": "My Rate"}}
-    state.fuel_rate_library = {"Gas Rate": {"name": "Gas Rate", "fuel_type": "natural_gas"}}
+    state.fuel_rate_library = {
+        "Gas Rate": {"name": "Gas Rate", "fuel_type": "natural_gas"}
+    }
     config = state.to_config_dict()
     assert "rate_library" not in config
     assert "fuel_rate_library" not in config
@@ -91,3 +93,24 @@ def test_resstock_weight_field_not_persisted_in_config_round_trip():
     restored.apply_config_dict(config)
     assert restored.resstock_weight is None
 
+
+# ───────────────────────────────────────────────────────────────────────────
+# additional_columns (Phase 4)
+# ───────────────────────────────────────────────────────────────────────────
+
+
+def test_additional_columns_default_is_empty_list():
+    state = AppState()
+    assert state.additional_columns == []
+
+
+def test_additional_columns_persisted_in_config_round_trip():
+    """additional_columns is saved and restored via to_config_dict / apply_config_dict."""
+    state = AppState()
+    state.additional_columns = ["in.heating_setpoint", "in.vintage"]
+    config = state.to_config_dict()
+    assert config["additional_columns"] == ["in.heating_setpoint", "in.vintage"]
+
+    restored = AppState()
+    restored.apply_config_dict(config)
+    assert restored.additional_columns == ["in.heating_setpoint", "in.vintage"]

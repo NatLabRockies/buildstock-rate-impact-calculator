@@ -220,6 +220,59 @@ def render_building_filter_page(app_state: AppState) -> None:
         if stale_col not in filter_cols:
             del app_state.active_filters[stale_col]
 
+    # ── Additional characteristics (pass-through into results) ───────────────
+    st.divider()
+    st.subheader("Additional Characteristics")
+    st.caption(
+        "Optional extra ``in.*`` columns to fetch for every selected building. "
+        "They are passed through to the results table so you can break results "
+        "down by attributes that aren't part of the default filter set."
+    )
+
+    try:
+        all_in_cols = mgr.get_input_characteristic_columns()
+    except Exception as exc:
+        st.warning(f"Could not enumerate dataset characteristics: {exc}")
+        all_in_cols = []
+
+    # Exclude columns already covered by the default base set (filter cols,
+    # state, geo) — selecting them as "additional" would be a no-op.
+    base_set = set(mgr.get_app_metadata_columns())
+    candidate_cols = [c for c in all_in_cols if c not in base_set]
+
+    # Keep any already-selected additional columns visible even if they aren't
+    # in the live schema (defensive — e.g. project loaded from disk).
+    prior_additional = list(app_state.additional_columns or [])
+    option_pool = sorted(set(candidate_cols) | set(prior_additional))
+
+    label_lookup = {col: _filter_label(col) for col in option_pool}
+
+    def _fmt(col: str) -> str:
+        return f"{label_lookup.get(col, col)}  ({col})"
+
+    selected_additional = st.multiselect(
+        "Additional characteristic columns",
+        options=option_pool,
+        default=[c for c in prior_additional if c in option_pool],
+        format_func=_fmt,
+        key=f"bf_additional_{app_state.dataset_type}",
+        help=(
+            "Extra metadata columns to include with every building row. "
+            "Changing the selection triggers a reload of metadata so the new "
+            "columns are joined onto the cached base set."
+        ),
+        placeholder="None — use defaults only",
+    )
+
+    # If the selection changed, persist and invalidate the session metadata so
+    # the page reloads with the new column set on the next render.
+    if sorted(selected_additional) != sorted(prior_additional):
+        app_state.additional_columns = list(selected_additional)
+        # Drop the cached session metadata so the geo cache key changes pick
+        # the new columns up on the next access.
+        st.session_state.pop("session_metadata", None)
+        st.rerun()
+
     # ── Matching-building summary ─────────────────────────────────────────────
     st.divider()
 

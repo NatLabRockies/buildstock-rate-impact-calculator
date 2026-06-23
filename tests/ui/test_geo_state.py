@@ -2,6 +2,7 @@
 Tests for AppState geographic-selection helpers: GISJOIN normalization,
 effective_geo_selection resolution, and apply_geo_filter behavior.
 """
+
 from __future__ import annotations
 
 import polars as pl
@@ -12,6 +13,7 @@ from buildstock_rate_impact_calculator.ui.state import AppState
 # ===========================================================================
 # _to_gisjoin
 # ===========================================================================
+
 
 class TestToGisjoin:
     def test_county_fips_converted(self) -> None:
@@ -31,6 +33,7 @@ class TestToGisjoin:
 # ===========================================================================
 # effective_geo_selection
 # ===========================================================================
+
 
 class TestEffectiveGeoSelection:
     def test_empty_state(self) -> None:
@@ -74,13 +77,16 @@ class TestEffectiveGeoSelection:
 # apply_geo_filter
 # ===========================================================================
 
+
 def _meta() -> pl.DataFrame:
-    return pl.DataFrame({
-        "bldg_id": [1, 2, 3, 4],
-        "in.state": ["CO", "CO", "AK", "TX"],
-        "in.county": ["G0800690", "G0800010", "G0200130", "G4802810"],
-        "in.puma": ["G08000803", "G08000801", "G02000101", "G48002000"],
-    })
+    return pl.DataFrame(
+        {
+            "bldg_id": [1, 2, 3, 4],
+            "in.state": ["CO", "CO", "AK", "TX"],
+            "in.county": ["G0800690", "G0800010", "G0200130", "G4802810"],
+            "in.puma": ["G08000803", "G08000801", "G02000101", "G48002000"],
+        }
+    )
 
 
 class TestApplyGeoFilter:
@@ -111,3 +117,54 @@ class TestApplyGeoFilter:
         state.selected_county_ids = ["G0800690"]
         df = _meta().drop(["in.county", "in.puma"])
         assert len(state.apply_geo_filter(df)) == 4
+
+
+# ===========================================================================
+# geo_cache_key — Phase 4: additional_columns must invalidate cache
+# ===========================================================================
+
+
+class TestGeoCacheKey:
+    def test_changes_when_dataset_changes(self) -> None:
+        from buildstock_rate_impact_calculator.ui.metadata_session import (
+            geo_cache_key,
+        )
+
+        a = AppState()
+        a.dataset_type = "resstock"
+        a.release = "2025_release_1"
+        b = AppState()
+        b.dataset_type = "comstock"
+        b.release = "2025_release_3"
+        assert geo_cache_key(a) != geo_cache_key(b)
+
+    def test_includes_additional_columns(self) -> None:
+        """Cache must invalidate when additional_columns changes."""
+        from buildstock_rate_impact_calculator.ui.metadata_session import (
+            geo_cache_key,
+        )
+
+        a = AppState()
+        a.dataset_type = "resstock"
+        a.release = "2025_release_1"
+
+        baseline_key = geo_cache_key(a)
+        a.additional_columns = ["in.vintage"]
+        assert geo_cache_key(a) != baseline_key
+
+    def test_order_independent_for_additional_columns(self) -> None:
+        from buildstock_rate_impact_calculator.ui.metadata_session import (
+            geo_cache_key,
+        )
+
+        a = AppState()
+        a.dataset_type = "resstock"
+        a.release = "2025_release_1"
+        a.additional_columns = ["in.vintage", "in.heating_setpoint"]
+
+        b = AppState()
+        b.dataset_type = "resstock"
+        b.release = "2025_release_1"
+        b.additional_columns = ["in.heating_setpoint", "in.vintage"]
+
+        assert geo_cache_key(a) == geo_cache_key(b)

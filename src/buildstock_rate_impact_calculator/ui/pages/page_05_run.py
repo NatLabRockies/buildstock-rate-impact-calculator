@@ -312,7 +312,9 @@ def _run_pipeline(
 
         # ── load metadata (geo-appropriate files, needed columns only) ───────
         tracker.start_phase("Loading building metadata")
-        metadata = mgr.load_metadata()
+        metadata = mgr.load_metadata(
+            additional_columns=list(app_state.additional_columns or []) or None,
+        )
         metadata = app_state.apply_geo_filter(metadata)
         if app_state.active_filters:
             _filters = {
@@ -548,6 +550,30 @@ def _run_pipeline(
             for fc in fuel_bill_cols:
                 total_expr = total_expr + pl.col(fc).fill_null(0.0)
             combined = combined.with_columns(total_expr.alias("total_energy_bill"))
+
+        # ── attach user-selected additional characteristic columns ───────────
+        extras = list(app_state.additional_columns or [])
+        extras_present = [c for c in extras if c in metadata.columns]
+        if extras_present:
+            bldg_col = mgr.config.building_id_column
+            # Join on (bldg_id, _row_uid) so ComStock per-row attributes (one
+            # row per geo aggregate) line up correctly. For ResStock _row_uid
+            # collapses to bldg_id so the join still matches one-to-one.
+            join_keys = ["bldg_id", "_row_uid"]
+            extras_df = (
+                metadata.select([bldg_col, "_row_uid", *extras_present])
+                .unique(subset=[bldg_col, "_row_uid"], keep="first")
+                .rename({bldg_col: "bldg_id"})
+            )
+            # Drop any extras columns that happen to be already present on
+            # ``combined`` to avoid ``_right`` suffix collisions.
+            extras_df = extras_df.select(
+                [
+                    *join_keys,
+                    *[c for c in extras_present if c not in combined.columns],
+                ]
+            )
+            combined = combined.join(extras_df, on=join_keys, how="left")
 
         tracker.start_phase("Saving results")
         result_store["df"] = combined

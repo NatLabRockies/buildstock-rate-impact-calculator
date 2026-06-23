@@ -43,7 +43,11 @@ def get_manager(app_state: AppState) -> BuildStockDataManager:
 
 
 def geo_cache_key(app_state: AppState) -> str:
-    """Stable hash of the dataset + active geographic selection."""
+    """Stable hash of the dataset + active geographic selection + extra columns.
+
+    Changing ``additional_columns`` invalidates the session cache so the next
+    load picks up the new column set.
+    """
     sel = app_state.effective_geo_selection()
     parts = "|".join(
         [
@@ -52,6 +56,7 @@ def geo_cache_key(app_state: AppState) -> str:
             str(sorted(sel["states"])),
             str(sorted(sel["county_ids"])),
             str(sorted(sel["puma_ids"])),
+            str(sorted(app_state.additional_columns)),
         ]
     )
     return hashlib.md5(parts.encode()).hexdigest()[:12]
@@ -88,7 +93,10 @@ def load_session_metadata(
     entry = st.session_state.get(mkey)
 
     if force_reload or not isinstance(entry, dict) or entry.get("geo_key") != gkey:
-        metadata = mgr.load_metadata(force_reload=force_reload)
+        metadata = mgr.load_metadata(
+            force_reload=force_reload,
+            additional_columns=list(app_state.additional_columns or []) or None,
+        )
         st.session_state[mkey] = {"geo_key": gkey, "df": metadata}
         app_state.metadata_loaded = True
     else:

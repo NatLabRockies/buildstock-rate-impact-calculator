@@ -569,7 +569,9 @@ class BuildStockDataManager:
         self._dataset_weight = float(value)
         return self._dataset_weight
 
-    def get_app_metadata_columns(self) -> List[str]:
+    def get_app_metadata_columns(
+        self, additional_columns: Optional[List[str]] = None
+    ) -> List[str]:
         """Return the possibly-necessary metadata columns for the app.
 
         Covers building IDs + geography (for timeseries downloads), the
@@ -577,6 +579,10 @@ class BuildStockDataManager:
         weights, and the annual fuel consumption / default utility bill columns
         used in results when no custom rate is defined. Columns absent from a
         given file are skipped at load time.
+
+        Args:
+            additional_columns: Extra ``in.*`` columns to merge into the result
+                (deduplicated against the base set). Defaults to no extras.
         """
         cols = [
             self.config.building_id_column,
@@ -599,7 +605,40 @@ class BuildStockDataManager:
             col = getattr(self.config, attr, None)
             if col:
                 cols.append(col)
+        if additional_columns:
+            cols += list(additional_columns)
         return list(dict.fromkeys(cols))
+
+    def get_input_characteristic_columns(self) -> List[str]:
+        """Return the sorted list of ``in.*`` characteristic columns available
+        in the dataset's metadata schema.
+
+        Used by the UI to populate the "Additional Characteristics" multiselect
+        on the Building Filter page. Results are cached on the instance so
+        repeated calls are free; the underlying schema fetch is a single
+        ``scan_parquet`` against the baseline metadata URI (column projection,
+        no row download).
+        """
+        cached = getattr(self, "_input_cols_cache", None)
+        if cached is not None:
+            return cached
+        try:
+            uri = self.metadata_uri
+            storage = (
+                None if "://" not in uri or uri.startswith("file://") else self._S3_ANON
+            )
+            lf = (
+                pl.scan_parquet(uri, storage_options=storage)
+                if storage
+                else pl.scan_parquet(uri)
+            )
+            schema_cols = list(lf.collect_schema().keys())
+            in_cols = sorted(c for c in schema_cols if c.startswith("in."))
+        except Exception as exc:
+            self.logger.warning(f"Could not enumerate input columns from {uri}: {exc}")
+            in_cols = []
+        self._input_cols_cache = in_cols
+        return in_cols
 
     def get_fuel_columns_for_type(
         self, fuel_type: str
@@ -644,7 +683,10 @@ class BuildStockDataManager:
         return all_columns
 
     def load_metadata(
-        self, columns: Optional[List[str]] = None, force_reload: bool = False
+        self,
+        columns: Optional[List[str]] = None,
+        force_reload: bool = False,
+        additional_columns: Optional[List[str]] = None,
     ) -> pl.DataFrame:
         """
         Load baseline metadata restricted to the possibly-necessary columns and
@@ -660,6 +702,9 @@ class BuildStockDataManager:
             columns: Optional list of columns to load. Defaults to
                      get_app_metadata_columns().
             force_reload: Re-download even if locally cached files exist.
+            additional_columns: Optional extra ``in.*`` columns to merge into
+                the base set. Enables the delta-fetch cache path when the base
+                set is already cached locally.
 
         Returns:
             Metadata as a Polars DataFrame.
@@ -673,7 +718,10 @@ class BuildStockDataManager:
                 metadata = self._load_metadata_csv_gz_tar(columns)
             else:
                 metadata = self.load_upgrade_metadata(
-                    0, columns=columns, force_reload=force_reload
+                    0,
+                    columns=columns,
+                    force_reload=force_reload,
+                    additional_columns=additional_columns,
                 )
 
             self._metadata = metadata
@@ -693,6 +741,7 @@ class BuildStockDataManager:
         upgrade_id: int,
         columns: Optional[List[str]] = None,
         force_reload: bool = False,
+        additional_columns: Optional[List[str]] = None,
     ) -> pl.DataFrame:
         """
         Load metadata/annual-results for an upgrade at the appropriate
@@ -707,6 +756,11 @@ class BuildStockDataManager:
             columns: Columns to load (missing ones are skipped per file).
                      Defaults to get_app_metadata_columns().
             force_reload: Re-download even if locally cached files exist.
+            additional_columns: Optional extra columns appended to the base
+                column set. When the base-only cache already exists, the
+                cached-fetch layer performs a delta-fetch of just the extras
+                (plus the bldg_id key) and joins them on, avoiding a re-fetch
+                of the base set.
 
         Returns:
             Polars DataFrame (geographic columns renamed to canonical
@@ -715,7 +769,19 @@ class BuildStockDataManager:
         Raises:
             RuntimeError: If no metadata file could be loaded.
         """
-        columns = self._deduplicate_columns(columns or self.get_app_metadata_columns())
+        # Resolve base + full column sets. ``columns``, when given by the
+        # caller, takes precedence and becomes the base set.
+        base_cols_raw = columns or self.get_app_metadata_columns()
+        base_cols = self._deduplicate_columns(list(base_cols_raw))
+        if additional_columns:
+            full_cols = self._deduplicate_columns(
+                list(base_cols) + list(additional_columns)
+            )
+            delta_base: Optional[List[str]] = base_cols
+        else:
+            full_cols = base_cols
+            delta_base = None
+
         uris = self.metadata_uris_for_upgrade(upgrade_id)
         if not uris:
             raise RuntimeError(
@@ -724,7 +790,9 @@ class BuildStockDataManager:
             )
 
         if len(uris) == 1:
-            return self._cached_metadata_fetch(uris[0], columns, force_reload)
+            return self._cached_metadata_fetch(
+                uris[0], full_cols, force_reload, base_columns=delta_base
+            )
 
         frames: List[Optional[pl.DataFrame]] = [None] * len(uris)
         errors: List[str] = []
@@ -733,7 +801,11 @@ class BuildStockDataManager:
         ) as executor:
             future_to_idx = {
                 executor.submit(
-                    self._cached_metadata_fetch, uri, columns, force_reload
+                    self._cached_metadata_fetch,
+                    uri,
+                    full_cols,
+                    force_reload,
+                    delta_base,
                 ): i
                 for i, uri in enumerate(uris)
             }
@@ -790,38 +862,124 @@ class BuildStockDataManager:
             df = df.rename(applicable_renames)
         return df
 
+    def merge_additional_columns(
+        self,
+        existing_df: pl.DataFrame,
+        uri: str,
+        extras: List[str],
+        bldg_col: str,
+    ) -> pl.DataFrame:
+        """Fetch ``[bldg_col, *extras]`` from ``uri`` and left-join onto
+        ``existing_df`` keyed on ``bldg_col``.
+
+        Used by the delta-fetch path in :meth:`_cached_metadata_fetch` to add
+        a few extra columns onto an already-cached metadata frame without
+        re-downloading the full column set. Extras missing from the source
+        schema are silently dropped (matches :meth:`_scan_select_available`
+        semantics).
+
+        Args:
+            existing_df: Frame containing at least ``bldg_col``.
+            uri: Source Parquet URI (``s3://``, ``https://``, or ``file://``).
+            extras: Extra column names to fetch and join.
+            bldg_col: Join key column name (must be present in both frames).
+
+        Returns:
+            A new DataFrame with the extras left-joined onto ``existing_df``.
+        """
+        if not extras:
+            return existing_df
+        fetch_cols = list(dict.fromkeys([bldg_col, *extras]))
+        delta_df = self._scan_select_available(uri, fetch_cols)
+        # Drop any duplicate (non-key) columns already present on existing_df.
+        delta_keep = [bldg_col] + [
+            c
+            for c in delta_df.columns
+            if c != bldg_col and c not in existing_df.columns
+        ]
+        delta_df = delta_df.select(delta_keep)
+        return existing_df.join(delta_df, on=bldg_col, how="left")
+
     def _cached_metadata_fetch(
-        self, uri: str, columns: List[str], force_reload: bool = False
+        self,
+        uri: str,
+        columns: List[str],
+        force_reload: bool = False,
+        base_columns: Optional[List[str]] = None,
     ) -> pl.DataFrame:
         """Fetch one metadata file with column projection, caching the projected
-        result locally so repeated loads avoid the network."""
+        result locally so repeated loads avoid the network.
+
+        When ``base_columns`` is provided and the full-columns cache file is
+        missing but the base-columns cache exists, only the extra columns
+        (``columns − base_columns``, plus the building-id key) are fetched
+        from the remote source and joined onto the cached base frame. The
+        merged result is then written under the full-columns col_hash so
+        subsequent identical calls are cache hits.
+        """
         if not self.cache_enabled:
             return self._scan_select_available(uri, columns)
 
+        full_cache = self._metadata_cache_path(uri, columns)
+        if full_cache.exists() and not force_reload:
+            try:
+                return pl.read_parquet(full_cache)
+            except Exception as exc:
+                self.logger.warning(
+                    f"Could not read metadata cache {full_cache}: {exc}. Re-fetching."
+                )
+
+        # Delta-fetch path: base cache exists, only extras are missing.
+        if base_columns and not force_reload:
+            extras = [c for c in columns if c not in set(base_columns)]
+            if extras:
+                base_cache = self._metadata_cache_path(uri, base_columns)
+                if base_cache.exists():
+                    try:
+                        base_df = pl.read_parquet(base_cache)
+                        merged = self.merge_additional_columns(
+                            existing_df=base_df,
+                            uri=uri,
+                            extras=extras,
+                            bldg_col=self.config.building_id_column,
+                        )
+                        try:
+                            full_cache.parent.mkdir(parents=True, exist_ok=True)
+                            merged.write_parquet(full_cache, compression="snappy")
+                        except Exception as exc:
+                            self.logger.warning(
+                                f"Failed to cache metadata to {full_cache}: {exc}"
+                            )
+                        return merged
+                    except Exception as exc:
+                        self.logger.warning(
+                            f"Delta-fetch failed for {uri}: {exc}. Falling back to full fetch."
+                        )
+
+        df = self._scan_select_available(uri, columns)
+        try:
+            full_cache.parent.mkdir(parents=True, exist_ok=True)
+            df.write_parquet(full_cache, compression="snappy")
+        except Exception as exc:
+            self.logger.warning(f"Failed to cache metadata to {full_cache}: {exc}")
+        return df
+
+    def _metadata_cache_path(self, uri: str, columns: List[str]) -> Path:
+        """Return the deterministic on-disk cache path for ``(uri, columns)``.
+
+        The path lives under ``cache_metadata_dir/{dataset}_{release}/`` and
+        carries the same ``{tail}_{col_hash}.parquet`` shape as
+        :meth:`_cached_metadata_fetch`'s legacy inline computation.
+        """
         col_hash = hashlib.md5("|".join(sorted(columns)).encode()).hexdigest()[:8]
         # e.g. 'state=AK_county=G0200130_AK_G0200130_upgrade0_agg' or national filename
         tail = "_".join(uri.split("/")[-3:]).replace("=", "-")
         tail = tail.rsplit(".parquet", 1)[0]
-        cache_file = (
+        return (
             self.cache_metadata_dir
             / f"{self.dataset_type}_{self.release}"
             / f"{tail}_{col_hash}.parquet"
         )
-        if cache_file.exists() and not force_reload:
-            try:
-                return pl.read_parquet(cache_file)
-            except Exception as exc:
-                self.logger.warning(
-                    f"Could not read metadata cache {cache_file}: {exc}. Re-fetching."
-                )
-
-        df = self._scan_select_available(uri, columns)
-        try:
-            cache_file.parent.mkdir(parents=True, exist_ok=True)
-            df.write_parquet(cache_file, compression="snappy")
-        except Exception as exc:
-            self.logger.warning(f"Failed to cache metadata to {cache_file}: {exc}")
-        return df
 
     def _load_metadata_csv_gz_tar(
         self, columns: Optional[List[str]] = None

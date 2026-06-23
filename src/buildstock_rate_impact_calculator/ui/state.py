@@ -36,6 +36,10 @@ class AppState:
         default_factory=dict
     )
 
+    # Extra ``in.*`` columns to include in metadata loads and pass through to
+    # results. Empty list = use the dataset's default app-metadata columns.
+    additional_columns: list[str] = field(default_factory=list)
+
     # ── Geographic selection ─────────────────────────────────────────────────
     geo_level: str = "state"  # 'state' | 'county' | 'puma' | 'census_tract'
     selected_geo_ids: list[str] = field(default_factory=list)
@@ -103,6 +107,7 @@ class AppState:
         "urdb_api_key",
         "output_dir",
         "project_name",
+        "additional_columns",
     )
 
     @staticmethod
