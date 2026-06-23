@@ -382,6 +382,83 @@ class TestFilterMetadata:
         )
         assert len(result) == 2
 
+    # ── Phase 3: numeric range filter shape ───────────────────────────────
+
+    def test_apply_value_filters_numeric_range_inclusive(
+        self, tmp_path: Path, sample_metadata: pl.DataFrame
+    ) -> None:
+        """Dict-shape ``{"min": a, "max": b}`` filters numeric col inclusively."""
+        mgr = _make_mgr(tmp_path)
+        result = mgr.filter_metadata(
+            sample_metadata, {"out.some_col": {"min": 2.0, "max": 4.0}}
+        )
+        assert sorted(result["out.some_col"].to_list()) == [2.0, 3.0, 4.0]
+
+    def test_apply_value_filters_numeric_range_min_only(
+        self, tmp_path: Path, sample_metadata: pl.DataFrame
+    ) -> None:
+        mgr = _make_mgr(tmp_path)
+        result = mgr.filter_metadata(sample_metadata, {"out.some_col": {"min": 3.0}})
+        assert sorted(result["out.some_col"].to_list()) == [3.0, 4.0, 5.0]
+
+    def test_apply_value_filters_numeric_range_max_only(
+        self, tmp_path: Path, sample_metadata: pl.DataFrame
+    ) -> None:
+        mgr = _make_mgr(tmp_path)
+        result = mgr.filter_metadata(sample_metadata, {"out.some_col": {"max": 2.0}})
+        assert sorted(result["out.some_col"].to_list()) == [1.0, 2.0]
+
+    def test_apply_value_filters_full_range_keeps_all_rows(
+        self, tmp_path: Path, sample_metadata: pl.DataFrame
+    ) -> None:
+        """A filter spanning the column's full min/max should be a no-op."""
+        mgr = _make_mgr(tmp_path)
+        result = mgr.filter_metadata(
+            sample_metadata, {"out.some_col": {"min": 1.0, "max": 5.0}}
+        )
+        assert result.height == sample_metadata.height
+
+    def test_apply_value_filters_mixed_categorical_and_numeric(
+        self, tmp_path: Path, sample_metadata: pl.DataFrame
+    ) -> None:
+        """Both list and dict filter shapes can be combined."""
+        mgr = _make_mgr(tmp_path)
+        result = mgr.filter_metadata(
+            sample_metadata,
+            {
+                "in.state": ["CO", "AZ"],
+                "out.some_col": {"min": 2.0, "max": 4.0},
+            },
+        )
+        # CO/AZ rows have out.some_col values [1, 2, 3, 4] -> [2, 3, 4] after numeric filter
+        assert sorted(result["out.some_col"].to_list()) == [2.0, 3.0, 4.0]
+
+
+class TestIsNumericColumn:
+    def test_detects_float_column(
+        self, tmp_path: Path, sample_metadata: pl.DataFrame
+    ) -> None:
+        mgr = _make_mgr(tmp_path)
+        assert mgr.is_numeric_column(sample_metadata, "out.some_col") is True
+
+    def test_detects_string_column_as_non_numeric(
+        self, tmp_path: Path, sample_metadata: pl.DataFrame
+    ) -> None:
+        mgr = _make_mgr(tmp_path)
+        assert mgr.is_numeric_column(sample_metadata, "in.state") is False
+
+    def test_missing_column_returns_false(
+        self, tmp_path: Path, sample_metadata: pl.DataFrame
+    ) -> None:
+        mgr = _make_mgr(tmp_path)
+        assert mgr.is_numeric_column(sample_metadata, "nonexistent") is False
+
+    def test_detects_in_sqft(self, tmp_path: Path) -> None:
+        """ComStock's in.sqft..ft2 column should be detected as numeric."""
+        mgr = _make_mgr(tmp_path)
+        df = pl.DataFrame({"in.sqft..ft2": [1000.0, 2000.0, 5000.0]})
+        assert mgr.is_numeric_column(df, "in.sqft..ft2") is True
+
 
 class TestStateMappingAndBuildingState:
     def test_update_state_mapping(

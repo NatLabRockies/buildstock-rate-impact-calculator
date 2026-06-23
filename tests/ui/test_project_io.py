@@ -1,6 +1,7 @@
 """
 Phase 2 tests for project_io module: rate file I/O.
 """
+
 from __future__ import annotations
 import json
 from pathlib import Path
@@ -16,6 +17,7 @@ from buildstock_rate_impact_calculator.ui.state import AppState
 
 
 # ── rate_to_filename ──────────────────────────────────────────────────────────
+
 
 def test_rate_to_filename_urdb():
     """URDB rate (has non-empty 'label') → '{label}.json'."""
@@ -44,6 +46,7 @@ def test_rate_to_filename_empty_label_falls_back_to_name():
 
 # ── save_project ──────────────────────────────────────────────────────────────
 
+
 def test_save_project_writes_config(tmp_path):
     """save_project writes config.json to project_dir."""
     state = AppState()
@@ -66,7 +69,9 @@ def test_save_project_config_excludes_rate_library(tmp_path):
     state.output_dir = tmp_path
     state.project_name = "Test Project"
     state.rate_library = {"ConEd SC1": {"name": "ConEd SC1", "label": "abc123"}}
-    state.fuel_rate_library = {"Gas Flat": {"name": "Gas Flat", "fuel_type": "natural_gas"}}
+    state.fuel_rate_library = {
+        "Gas Flat": {"name": "Gas Flat", "fuel_type": "natural_gas"}
+    }
 
     save_project(state)
 
@@ -81,7 +86,9 @@ def test_save_project_writes_rate_files(tmp_path):
     state.output_dir = tmp_path
     state.project_name = "Test Project"
     state.rate_library = {"ConEd SC1": {"name": "ConEd SC1", "label": "abc123"}}
-    state.fuel_rate_library = {"Gas Flat": {"name": "Gas Flat", "fuel_type": "natural_gas"}}
+    state.fuel_rate_library = {
+        "Gas Flat": {"name": "Gas Flat", "fuel_type": "natural_gas"}
+    }
 
     save_project(state)
 
@@ -119,6 +126,7 @@ def test_save_project_creates_results_dir(tmp_path):
 
 
 # ── load_project_rates ────────────────────────────────────────────────────────
+
 
 def test_load_project_rates_all_found(tmp_path):
     """All rate files present → full libraries returned, no missing names."""
@@ -215,6 +223,7 @@ def test_load_project_rates_empty_assignments(tmp_path):
 
 # ── AppState.save_config delegation ──────────────────────────────────────────
 
+
 def test_save_config_delegates_to_save_project_when_project_name_set(tmp_path):
     """save_config writes to project_dir/config.json when project_name is set."""
     state = AppState()
@@ -236,3 +245,45 @@ def test_save_config_uses_path_when_no_project_name(tmp_path):
     state.save_config(out)
 
     assert out.exists()
+
+
+# ── Phase 3: numeric range filter round-trip ─────────────────────────────────
+
+
+def test_project_round_trip_with_numeric_range_filter(tmp_path):
+    """Numeric range filters ({"min": ..., "max": ...}) survive save/load."""
+    state = AppState()
+    state.output_dir = tmp_path
+    state.project_name = "Range Filter Project"
+    state.dataset_type = "comstock"
+    state.release = "2024_release_2"
+    state.active_filters = {
+        "in.building_type": ["RetailStandalone", "Hospital"],
+        "in.sqft..ft2": {"min": 5000.0, "max": 50000.0},
+    }
+
+    state.save_config("ignored.json")
+
+    loaded = AppState.load_config(state.project_dir / "config.json")
+    assert loaded.active_filters["in.building_type"] == [
+        "RetailStandalone",
+        "Hospital",
+    ]
+    assert loaded.active_filters["in.sqft..ft2"] == {
+        "min": 5000.0,
+        "max": 50000.0,
+    }
+
+
+def test_project_round_trip_with_only_categorical_filters(tmp_path):
+    """Backward-compat: list-shape filters still round-trip cleanly."""
+    state = AppState()
+    state.output_dir = tmp_path
+    state.project_name = "Cat Filter Project"
+    state.dataset_type = "resstock"
+    state.active_filters = {"in.heating_fuel": ["Natural Gas", "Electricity"]}
+
+    state.save_config("ignored.json")
+
+    loaded = AppState.load_config(state.project_dir / "config.json")
+    assert loaded.active_filters == {"in.heating_fuel": ["Natural Gas", "Electricity"]}

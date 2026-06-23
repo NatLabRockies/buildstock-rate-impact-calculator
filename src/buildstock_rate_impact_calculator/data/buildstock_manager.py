@@ -1191,14 +1191,20 @@ class BuildStockDataManager:
         self, metadata_df: pl.DataFrame, filters: Dict[str, Any]
     ) -> pl.DataFrame:
         """
-        Filter a metadata DataFrame by a dictionary of column→values criteria.
+        Filter a metadata DataFrame by a dictionary of column→criteria.
 
-        Each filter is applied as an AND condition. If a filter value is a list,
-        the column must match any of the values (IN filter). If a scalar, exact match.
+        Each filter is applied as an AND condition. Supported value shapes:
+
+        - ``list[Any]``  — IN filter (categorical multiselect)
+        - ``scalar``     — exact match
+        - ``dict``       — numeric range filter with optional ``"min"`` and/or
+          ``"max"`` keys (inclusive on both ends). Missing key means unbounded
+          on that side. Empty dict is a no-op.
 
         Args:
             metadata_df: Loaded metadata DataFrame.
-            filters: Dict mapping column name to a value or list of values.
+            filters: Dict mapping column name to a value, list, or
+                ``{"min": ..., "max": ...}`` range.
 
         Returns:
             Filtered DataFrame.
@@ -1210,11 +1216,31 @@ class BuildStockDataManager:
         for column, value in filters.items():
             if column not in result.columns:
                 raise ValueError(f"Filter column '{column}' not found in DataFrame.")
-            if isinstance(value, list):
+            if isinstance(value, dict):
+                # Numeric range filter: {"min": a, "max": b} (either bound optional)
+                lo = value.get("min")
+                hi = value.get("max")
+                if lo is not None:
+                    result = result.filter(pl.col(column) >= lo)
+                if hi is not None:
+                    result = result.filter(pl.col(column) <= hi)
+            elif isinstance(value, list):
                 result = result.filter(pl.col(column).is_in(value))
             else:
                 result = result.filter(pl.col(column) == value)
         return result
+
+    def is_numeric_column(self, metadata_df: pl.DataFrame, column: str) -> bool:
+        """
+        Return True if *column* is present and has a numeric (integer or
+        float) Polars dtype; False if the column is missing or non-numeric.
+
+        Used by the building-filter UI to choose between a range-slider and
+        a multiselect widget for each configured filter column.
+        """
+        if column not in metadata_df.columns:
+            return False
+        return metadata_df.schema[column].is_numeric()
 
     def download_timeseries_with_progress(
         self,

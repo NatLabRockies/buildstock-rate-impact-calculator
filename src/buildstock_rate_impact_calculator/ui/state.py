@@ -3,6 +3,7 @@ AppState — central dataclass for all Streamlit session state.
 
 All page modules read from and write to this dataclass via st.session_state.
 """
+
 from __future__ import annotations
 import json
 from dataclasses import dataclass, field
@@ -16,18 +17,27 @@ class AppState:
 
     # ── Dataset selection ────────────────────────────────────────────────────
     # dataset_type: str = "resstock"
-    dataset_type: None | str = None  # e.g. "resstock" or "comstock"; None if not yet selected
+    dataset_type: None | str = (
+        None  # e.g. "resstock" or "comstock"; None if not yet selected
+    )
     # release: str = "2024_release_2"
     release: None | str = None  # e.g. "2024_release_2"; None if not yet selected
     # selected_upgrades: list[int] = field(default_factory=lambda: [0])
-    selected_upgrades: None | list[int] = None  # List of selected upgrade IDs; None if not yet selected
+    selected_upgrades: None | list[int] = (
+        None  # List of selected upgrade IDs; None if not yet selected
+    )
 
     # ── Building filters ─────────────────────────────────────────────────────
-    # Maps column name → list of selected values
-    active_filters: dict[str, list[Any]] = field(default_factory=dict)
+    # Maps column name to either:
+    #   - list[Any]  — categorical multiselect (column must match any value)
+    #   - dict       — numeric range ``{"min": float, "max": float}`` (either
+    #                  bound optional, inclusive on both sides)
+    active_filters: dict[str, list[Any] | dict[str, float]] = field(
+        default_factory=dict
+    )
 
     # ── Geographic selection ─────────────────────────────────────────────────
-    geo_level: str = "state"             # 'state' | 'county' | 'puma' | 'census_tract'
+    geo_level: str = "state"  # 'state' | 'county' | 'puma' | 'census_tract'
     selected_geo_ids: list[str] = field(default_factory=list)
     # New map-based geographic selections (support mixed county + PUMA)
     selected_states: list[str] = field(default_factory=list)
@@ -42,7 +52,9 @@ class AppState:
     rate_assignments: dict[str, str] = field(default_factory=dict)
     # Maps scenario key → {fuel_type → rate name (key in fuel_rate_library) or None}
     # fuel_type is one of "natural_gas", "propane", "fuel_oil"
-    fuel_rate_assignments: dict[str, dict[str, str | None]] = field(default_factory=dict)
+    fuel_rate_assignments: dict[str, dict[str, str | None]] = field(
+        default_factory=dict
+    )
     # Maps rate name → URDB label (for URDB rates only); used to re-fetch missing rate files
     rate_label_map: dict[str, str] = field(default_factory=dict)
 
@@ -127,7 +139,9 @@ class AppState:
             if self.geo_level == "state":
                 states = list(self.selected_geo_ids)
             elif self.geo_level == "county":
-                counties = [self._to_gisjoin(g, "county") for g in self.selected_geo_ids]
+                counties = [
+                    self._to_gisjoin(g, "county") for g in self.selected_geo_ids
+                ]
             elif self.geo_level == "puma":
                 pumas = [self._to_gisjoin(g, "puma") for g in self.selected_geo_ids]
 
@@ -207,6 +221,7 @@ class AppState:
         """
         if self.project_name:
             from buildstock_rate_impact_calculator.ui.project_io import save_project
+
             save_project(self)
             return
         path = Path(path)
@@ -230,6 +245,7 @@ def init_session_state() -> AppState:
     Returns the current AppState.
     """
     import streamlit as st  # imported locally so tests don't require streamlit runtime
+
     if "app_state" not in st.session_state:
         st.session_state["app_state"] = AppState()
     return st.session_state["app_state"]
