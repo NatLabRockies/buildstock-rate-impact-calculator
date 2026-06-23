@@ -207,6 +207,11 @@ class BuildStockDataManager:
             baseline_filename="baseline_agg.parquet",
             upgrade_filename="upgrade{upgrade_id:02d}_agg.parquet",
             natural_gas_energy_column="out.natural_gas.total.energy_consumption..kwh",
+            natural_gas_bill_column="out.utility_bills.natural_gas_bill..usd",
+            propane_energy_column="out.propane.total.energy_consumption..kwh",
+            propane_bill_column="out.utility_bills.propane_bill..usd",
+            fuel_oil_energy_column="out.fuel_oil.total.energy_consumption..kwh",
+            fuel_oil_bill_column="out.utility_bills.fuel_oil_bill..usd",
             # ComStock 2024 r2 has no propane/fuel-oil energy or default bill columns
             filter_columns=[
                 "in.comstock_building_type",
@@ -242,8 +247,11 @@ class BuildStockDataManager:
             baseline_filename="upgrade0_agg.parquet",
             upgrade_filename="upgrade{upgrade_id}_agg.parquet",
             natural_gas_energy_column="out.natural_gas.total.energy_consumption..kwh",
+            natural_gas_bill_column='calc.weighted.utility_bills.natural_gas_bill_state_average..billion_usd',
             propane_energy_column="out.propane.total.energy_consumption..kwh",
+            propane_bill_column="calc.weighted.utility_bills.propane_bill_state_average..billion_usd",
             fuel_oil_energy_column="out.fuel_oil.total.energy_consumption..kwh",
+            fuel_oil_bill_column="calc.weighted.utility_bills.fuel_oil_bill_state_average..billion_usd",
             electricity_bill_column="out.utility_bills.electricity_bill_mean..usd",
             filter_columns=[
                 "in.comstock_building_type",
