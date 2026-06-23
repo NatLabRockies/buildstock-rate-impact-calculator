@@ -8,13 +8,16 @@ geographic resolution: ComStock county/PUMA selections load the
 by_state_and_county / by_state_and_puma aggregate files because the national
 aggregate only resolves location to state level.
 """
+
 from __future__ import annotations
 import hashlib
 from typing import Optional, Tuple, Any
 
 import streamlit as st
 
-from buildstock_rate_impact_calculator.data.buildstock_manager import BuildStockDataManager
+from buildstock_rate_impact_calculator.data.buildstock_manager import (
+    BuildStockDataManager,
+)
 from buildstock_rate_impact_calculator.ui.state import AppState
 
 
@@ -42,13 +45,15 @@ def get_manager(app_state: AppState) -> BuildStockDataManager:
 def geo_cache_key(app_state: AppState) -> str:
     """Stable hash of the dataset + active geographic selection."""
     sel = app_state.effective_geo_selection()
-    parts = "|".join([
-        app_state.dataset_type or "",
-        app_state.release or "",
-        str(sorted(sel["states"])),
-        str(sorted(sel["county_ids"])),
-        str(sorted(sel["puma_ids"])),
-    ])
+    parts = "|".join(
+        [
+            app_state.dataset_type or "",
+            app_state.release or "",
+            str(sorted(sel["states"])),
+            str(sorted(sel["county_ids"])),
+            str(sorted(sel["puma_ids"])),
+        ]
+    )
     return hashlib.md5(parts.encode()).hexdigest()[:12]
 
 
@@ -91,4 +96,11 @@ def load_session_metadata(
         # A manager rebuilt in a fresh session needs its state mapping repopulated
         if not mgr._state_mapping:
             mgr._update_state_mapping(metadata)
+
+    # Populate the dataset-wide scalar weight for ResStock (no-op for ComStock,
+    # which uses per-row weights from the metadata). Cached on both the manager
+    # and AppState; subsequent calls are free.
+    if app_state.resstock_weight is None:
+        app_state.resstock_weight = mgr.get_dataset_weight()
+
     return mgr, metadata

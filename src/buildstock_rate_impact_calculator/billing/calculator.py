@@ -746,31 +746,108 @@ class UtilityBillCalculator:
         )
         return bill_results
 
+    def _calc_one(
+        self,
+        bldg_id: Any,
+        upgrade: int,
+        load_array: "np.ndarray",
+        pysam_params: Dict[str, Any],
+        **per_row_meta: Any,
+    ) -> Dict[str, Any]:
+        """Calculate one bill row. Patchable method (used by tests).
+
+        Extra per-row metadata (e.g. ``weight``, ``sqft``) is surfaced as
+        columns on the result so downstream aggregation can use it without
+        re-joining metadata.
+        """
+        try:
+            model = ur5.new()
+            # Base parameters
+            model.Lifetime.analysis_period = 1
+            model.Lifetime.system_use_lifetime_output = 0
+            model.Lifetime.inflation_rate = 0.0
+            model.SystemOutput.degradation = [0.0]
+            model.SystemOutput.gen = [0.0] * HOURS_PER_YEAR
+            model.ElectricityRates.ur_metering_option = 0
+
+            # Apply pre-converted PySAM parameters directly.
+            model.ElectricityRates.replace(copy.deepcopy(pysam_params))
+
+            # Validate and assign load
+            validated, _ = validate_load_profile(
+                np.array(load_array), expected_length=HOURS_PER_YEAR
+            )
+            model.Load.load = validated.tolist()
+            monthly_peaks = PySAM.LoadTools.get_monthly_peaks(validated.tolist(), 1)
+            model.ElectricityRates.ur_yearzero_usage_peaks = monthly_peaks
+
+            model.execute()
+
+            annual_bill = float(getattr(model.Outputs, 'utility_bill_wo_sys_year1', 0.0))
+            annual_kwh = float(getattr(model.Outputs, 'year1_electric_load', 0.0))
+            avg_rate = (annual_bill / annual_kwh * 100) if annual_kwh > 0 else 0.0
+            monthly_raw = getattr(model.Outputs, 'year1_monthly_utility_bill_wo_sys', None)
+            monthly = list(monthly_raw) if monthly_raw is not None else [0.0] * 12
+
+            row = {
+                "bldg_id": bldg_id,
+                "upgrade": upgrade,
+                "annual_bill": annual_bill,
+                "annual_energy_kwh": annual_kwh,
+                "average_rate_ct_kwh": avg_rate,
+                "monthly_bills": str(monthly),
+                "error": None,
+            }
+            row.update(per_row_meta)
+            return row
+        except Exception as exc:
+            self.logger.warning(
+                f"Bill calculation failed for {bldg_id}/{upgrade}: {exc}"
+            )
+            row = {
+                "bldg_id": bldg_id,
+                "upgrade": upgrade,
+                "annual_bill": None,
+                "annual_energy_kwh": None,
+                "average_rate_ct_kwh": None,
+                "monthly_bills": None,
+                "error": str(exc),
+            }
+            row.update(per_row_meta)
+            return row
+
     def calculate_batch_bills(
         self,
-        load_records: List[Tuple[Any, int, "np.ndarray"]],
+        load_records: List[Any],
         rate_config: Dict[str, Any],
         progress_cb: Optional[Any] = None,
         max_workers: Optional[int] = None,
     ) -> pl.DataFrame:
         """
-        Calculate utility bills for a batch of (building_id, upgrade, load_profile) records.
+        Calculate utility bills for a batch of load records.
 
-        Runs calculations in a ThreadPoolExecutor. Per-building PySAM errors are caught
-        and recorded as null rows so a single failure does not abort the entire batch.
+        Each record may be either:
+          * a legacy 3-tuple ``(bldg_id, upgrade, load_array)``, or
+          * a dict with keys ``bldg_id``, ``upgrade``, ``load_array`` and any
+            number of additional per-row metadata fields (e.g. ``weight``,
+            ``sqft``, ``row_idx``) that should be surfaced as result columns.
+
+        The calculator passes ``load_array`` to PySAM **as-is** — any per-row
+        load scaling (e.g. by ComStock ``weight``) is the caller's
+        responsibility, applied before the record is constructed.
 
         Args:
-            load_records: List of (bldg_id, upgrade, load_array) tuples.
-                load_array must be a numpy array of 8760 hourly kWh values.
+            load_records: Records as described above.
             rate_config: URDB v8-compatible rate dict to apply to all records.
             progress_cb: Optional callable ``(done: int, total: int)`` called after
                 each record is processed (success or failure).
             max_workers: Thread pool size (defaults to self.max_workers).
 
         Returns:
-            Polars DataFrame with columns:
-                bldg_id, upgrade, annual_bill, annual_energy_kwh,
-                average_rate_ct_kwh, monthly_bills (as string), error
+            Polars DataFrame with at least: ``bldg_id, upgrade, annual_bill,
+            annual_energy_kwh, average_rate_ct_kwh, monthly_bills, error``.
+            Any per-row metadata fields supplied via dict records appear as
+            additional columns (filled with ``None`` for tuple-style records).
         """
         max_workers = max_workers or getattr(self, "max_workers", 4)
         total = len(load_records)
@@ -782,68 +859,52 @@ class UtilityBillCalculator:
         # None/empty-tuple filtering inside _calc_one.
         pysam_params = UrdbRateBuilder.prepare_for_pysam(rate_config)
 
-        rows = []
-
-        def _calc_one(bldg_id, upgrade, load_array):
-            try:
-                model = ur5.new()
-                # Base parameters
-                model.Lifetime.analysis_period = 1
-                model.Lifetime.system_use_lifetime_output = 0
-                model.Lifetime.inflation_rate = 0.0
-                model.SystemOutput.degradation = [0.0]
-                model.SystemOutput.gen = [0.0] * HOURS_PER_YEAR
-                model.ElectricityRates.ur_metering_option = 0
-
-                # Apply pre-converted PySAM parameters directly.
-                model.ElectricityRates.replace(copy.deepcopy(pysam_params))
-
-                # Validate and assign load
-                validated, _ = validate_load_profile(
-                    np.array(load_array), expected_length=HOURS_PER_YEAR
-                )
-                model.Load.load = validated.tolist()
-                monthly_peaks = PySAM.LoadTools.get_monthly_peaks(validated.tolist(), 1)
-                model.ElectricityRates.ur_yearzero_usage_peaks = monthly_peaks
-
-                model.execute()
-
-                annual_bill = float(getattr(model.Outputs, 'utility_bill_wo_sys_year1', 0.0))
-                annual_kwh = float(getattr(model.Outputs, 'year1_electric_load', 0.0))
-                avg_rate = (annual_bill / annual_kwh * 100) if annual_kwh > 0 else 0.0
-                monthly_raw = getattr(model.Outputs, 'year1_monthly_utility_bill_wo_sys', None)
-                monthly = list(monthly_raw) if monthly_raw is not None else [0.0] * 12
-
-                return {
+        # Collect the union of per-row metadata keys so we can null-fill rows
+        # that didn't supply them (e.g. legacy tuple records).
+        meta_keys: set = set()
+        normalized_records: list[dict] = []
+        for rec in load_records:
+            if isinstance(rec, dict):
+                bldg_id = rec["bldg_id"]
+                upgrade = rec["upgrade"]
+                load_array = rec["load_array"]
+                extras = {
+                    k: v for k, v in rec.items()
+                    if k not in ("bldg_id", "upgrade", "load_array")
+                }
+            else:
+                # Legacy tuple form
+                bldg_id, upgrade, load_array = rec
+                extras = {}
+            meta_keys.update(extras.keys())
+            normalized_records.append(
+                {
                     "bldg_id": bldg_id,
                     "upgrade": upgrade,
-                    "annual_bill": annual_bill,
-                    "annual_energy_kwh": annual_kwh,
-                    "average_rate_ct_kwh": avg_rate,
-                    "monthly_bills": str(monthly),
-                    "error": None,
+                    "load_array": load_array,
+                    "extras": extras,
                 }
-            except Exception as exc:
-                self.logger.warning(
-                    f"Bill calculation failed for {bldg_id}/{upgrade}: {exc}"
-                )
-                return {
-                    "bldg_id": bldg_id,
-                    "upgrade": upgrade,
-                    "annual_bill": None,
-                    "annual_energy_kwh": None,
-                    "average_rate_ct_kwh": None,
-                    "monthly_bills": None,
-                    "error": str(exc),
-                }
+            )
+
+        rows: list[dict] = []
 
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {
-                pool.submit(_calc_one, bldg_id, upgrade, load_array): (bldg_id, upgrade)
-                for bldg_id, upgrade, load_array in load_records
+                pool.submit(
+                    self._calc_one,
+                    rec["bldg_id"],
+                    rec["upgrade"],
+                    rec["load_array"],
+                    pysam_params,
+                    **rec["extras"],
+                ): (rec["bldg_id"], rec["upgrade"])
+                for rec in normalized_records
             }
             for future in as_completed(futures):
                 row = future.result()
+                # Ensure every row has every meta key (None where unspecified)
+                for k in meta_keys:
+                    row.setdefault(k, None)
                 rows.append(row)
                 with count_lock:
                     completed_count[0] += 1
@@ -855,7 +916,7 @@ class UtilityBillCalculator:
                         pass
 
         if not rows:
-            return pl.DataFrame(schema={
+            schema = {
                 "bldg_id": pl.Int64,
                 "upgrade": pl.Int64,
                 "annual_bill": pl.Float64,
@@ -863,6 +924,7 @@ class UtilityBillCalculator:
                 "average_rate_ct_kwh": pl.Float64,
                 "monthly_bills": pl.Utf8,
                 "error": pl.Utf8,
-            })
+            }
+            return pl.DataFrame(schema=schema)
 
         return pl.DataFrame(rows)

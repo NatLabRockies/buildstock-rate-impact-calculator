@@ -67,3 +67,27 @@ def test_rate_library_not_serialized_but_still_functional():
     assert "TestRate" in state.rate_library
     # Not in config dict
     assert "rate_library" not in state.to_config_dict()
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# resstock_weight (Phase 2)
+# ───────────────────────────────────────────────────────────────────────────
+
+
+def test_resstock_weight_field_default_is_none():
+    """resstock_weight defaults to None on a fresh AppState."""
+    state = AppState()
+    assert state.resstock_weight is None
+
+
+def test_resstock_weight_field_not_persisted_in_config_round_trip():
+    """resstock_weight is runtime-only — not saved to config, not restored from it."""
+    state = AppState()
+    state.resstock_weight = 188.0
+    config = state.to_config_dict()
+    assert "resstock_weight" not in config
+
+    restored = AppState()
+    restored.apply_config_dict(config)
+    assert restored.resstock_weight is None
+

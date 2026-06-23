@@ -6,6 +6,7 @@ Functions:
   compute_bill_diff — compute signed bill difference vs baseline for each building
   format_for_export — serialize results DataFrame to CSV bytes
 """
+
 from __future__ import annotations
 import polars as pl
 from typing import Optional
@@ -20,13 +21,28 @@ _BILL_COLUMNS = (
 )
 
 # Non-grouping, non-bill metadata columns excluded from the group-by selector
-_META_COLUMNS = frozenset({
-    "bldg_id", "upgrade", "scenario",
-    "annual_energy_kwh", "average_rate_ct_kwh", "monthly_bills",
-    "error", "baseline_bill", "bill_diff",
-    "natural_gas_rate_name", "propane_rate_name", "fuel_oil_rate_name",
-    "applicable",
-} | set(_BILL_COLUMNS))
+_META_COLUMNS = frozenset(
+    {
+        "bldg_id",
+        "upgrade",
+        "scenario",
+        "annual_energy_kwh",
+        "average_rate_ct_kwh",
+        "monthly_bills",
+        "error",
+        "baseline_bill",
+        "bill_diff",
+        "natural_gas_rate_name",
+        "propane_rate_name",
+        "fuel_oil_rate_name",
+        "applicable",
+        # Per-row weighting plumbing (Phase 2: weight-aware billing pipeline)
+        "weight",
+        "sqft",
+        "_row_uid",
+    }
+    | set(_BILL_COLUMNS)
+)
 
 
 def summarize_bills(
@@ -71,10 +87,17 @@ def summarize_bills(
         pl.col("bldg_id").count().alias("count"),
     ]
     if "annual_energy_kwh" in df.columns:
-        agg_exprs.append(pl.col("annual_energy_kwh").mean().alias("mean_annual_energy_kwh"))
+        agg_exprs.append(
+            pl.col("annual_energy_kwh").mean().alias("mean_annual_energy_kwh")
+        )
 
     # Aggregate fuel bill columns when present
-    for fuel_col in ("natural_gas_bill", "propane_bill", "fuel_oil_bill", "total_energy_bill"):
+    for fuel_col in (
+        "natural_gas_bill",
+        "propane_bill",
+        "fuel_oil_bill",
+        "total_energy_bill",
+    ):
         if fuel_col in df.columns:
             agg_exprs.append(pl.col(fuel_col).mean().alias(f"mean_{fuel_col}"))
             agg_exprs.append(pl.col(fuel_col).sum().alias(f"total_{fuel_col}"))
@@ -107,10 +130,8 @@ def compute_bill_diff(
             f"Available upgrades: {sorted(results_df['upgrade'].unique().to_list())}"
         )
 
-    baseline = (
-        results_df
-        .filter(pl.col("upgrade") == baseline_upgrade)
-        .select(["bldg_id", pl.col("annual_bill").alias("baseline_bill")])
+    baseline = results_df.filter(pl.col("upgrade") == baseline_upgrade).select(
+        ["bldg_id", pl.col("annual_bill").alias("baseline_bill")]
     )
 
     non_baseline = results_df.filter(pl.col("upgrade") != baseline_upgrade)

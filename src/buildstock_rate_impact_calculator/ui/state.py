@@ -65,6 +65,10 @@ class AppState:
     building_count: int = 0
     estimated_download_bytes: int = 0
     results_available: bool = False
+    # Dataset-wide scalar weight for ResStock (housing units represented by each
+    # row); None for ComStock (per-row weight is read from the metadata) and
+    # before the first metadata load. Runtime-only; re-derived on dataset load.
+    resstock_weight: float | None = None
 
     # ── Serialization helpers ────────────────────────────────────────────────
 
