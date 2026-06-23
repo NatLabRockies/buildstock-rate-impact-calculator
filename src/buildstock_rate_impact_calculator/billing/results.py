@@ -2,16 +2,21 @@
 Results summarization and export utilities for BuildStock TOU bill calculations.
 
 Functions:
-  add_cost_per_sqft    — adds the per-row $/ft² column (ComStock-style frames)
-  summarize_bills      — dataset-aware aggregation by upgrade and optional group
-  compute_bill_savings — per-building (baseline − upgrade) savings; ComStock
-                          also gets a per-sqft variant
-  format_for_export    — serialize results DataFrame to CSV bytes
+  add_cost_per_sqft           — adds the per-row $/ft² column (ComStock frames)
+  summarize_bills             — dataset-aware aggregation by upgrade + group
+  compute_bill_savings        — per-building (baseline − upgrade) savings;
+                                 ComStock also gets a per-sqft variant
+  groupable_columns           — list of columns eligible for the results page
+                                 grouping selector (filter ∪ additional cols
+                                 present in the results df)
+  filter_df_by_group_values   — apply a "pills" selection to the results df
+                                 (empty selection → no-op)
+  format_for_export           — serialize results DataFrame to CSV bytes
 """
 
 from __future__ import annotations
 import polars as pl
-from typing import Optional
+from typing import Iterable, Optional, Sequence
 
 # Columns that represent per-building bill amounts (used for aggregation).
 _BILL_COLUMNS = (
@@ -282,3 +287,60 @@ def format_for_export(results_df: pl.DataFrame) -> bytes:
         UTF-8 encoded CSV bytes.
     """
     return results_df.write_csv().encode("utf-8")
+
+
+def groupable_columns(
+    df: pl.DataFrame,
+    filter_columns: Optional[Iterable[str]] = None,
+    additional_columns: Optional[Iterable[str]] = None,
+) -> list[str]:
+    """Return the columns eligible for the results-page grouping selector.
+
+    Combines the dataset's configured ``filter_columns`` with the user's
+    ``additional_columns`` selection, keeps only those actually present in
+    ``df``, dedupes, and preserves order (filter columns first, then
+    additional columns). Either argument may be ``None``.
+
+    Args:
+        df: The results DataFrame whose columns gate the result.
+        filter_columns: Columns the dataset configures as filterable
+            (``DatasetConfig.filter_columns``).
+        additional_columns: User-selected extra metadata columns
+            (``AppState.additional_columns``).
+
+    Returns:
+        Ordered list of column names suitable for ``st.selectbox`` options.
+    """
+    available = set(df.columns)
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for source in (filter_columns or (), additional_columns or ()):
+        for col in source:
+            if col in available and col not in seen:
+                ordered.append(col)
+                seen.add(col)
+    return ordered
+
+
+def filter_df_by_group_values(
+    df: pl.DataFrame,
+    group_col: Optional[str],
+    selected: Sequence,
+) -> pl.DataFrame:
+    """Apply a results-page pill selection to the results DataFrame.
+
+    Args:
+        df: Results DataFrame.
+        group_col: The grouping column the user picked, or ``None`` if no
+            grouping is active.
+        selected: Values toggled in ``st.pills``; an empty list means "no
+            filter — show everything".
+
+    Returns:
+        Filtered DataFrame, or ``df`` unchanged when no filter applies
+        (no group column, no selected values, or group column not present
+        in ``df``).
+    """
+    if not group_col or not selected or group_col not in df.columns:
+        return df
+    return df.filter(pl.col(group_col).is_in(list(selected)))

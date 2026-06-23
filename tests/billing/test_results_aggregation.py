@@ -26,6 +26,7 @@ import pytest
 from buildstock_rate_impact_calculator.billing.results import (
     add_cost_per_sqft,
     compute_bill_savings,
+    groupable_columns,
     summarize_bills,
 )
 
@@ -288,3 +289,75 @@ class TestComputeBillSavings:
         if "bill_savings_per_sqft" in out.columns:
             vals = out["bill_savings_per_sqft"].to_list()
             assert all(v is None or math.isnan(v) for v in vals)
+
+
+# ---------------------------------------------------------------------------
+# Phase 7: groupable_columns
+# ---------------------------------------------------------------------------
+
+
+class TestGroupableColumns:
+    def _df(self) -> pl.DataFrame:
+        return pl.DataFrame(
+            {
+                "bldg_id": [1, 2],
+                "upgrade": [0, 0],
+                "annual_bill": [100.0, 200.0],
+                "in.state": ["CO", "CA"],
+                "in.vintage": ["1980s", "2000s"],
+                "in.building_type": ["SFD", "SFD"],
+            }
+        )
+
+    def test_combines_filter_and_additional(self) -> None:
+        df = self._df()
+        cols = groupable_columns(
+            df,
+            filter_columns=["in.state", "in.vintage"],
+            additional_columns=["in.building_type"],
+        )
+        # All three are present in df → all three are groupable.
+        assert set(cols) == {"in.state", "in.vintage", "in.building_type"}
+
+    def test_drops_columns_absent_from_df(self) -> None:
+        df = self._df()
+        cols = groupable_columns(
+            df,
+            filter_columns=["in.state", "in.does_not_exist"],
+            additional_columns=["in.building_type", "in.also_missing"],
+        )
+        assert set(cols) == {"in.state", "in.building_type"}
+
+    def test_dedupes_overlap(self) -> None:
+        df = self._df()
+        cols = groupable_columns(
+            df,
+            filter_columns=["in.state", "in.vintage"],
+            additional_columns=["in.state", "in.building_type"],
+        )
+        # in.state appears in both → should be listed once.
+        assert cols.count("in.state") == 1
+        assert set(cols) == {"in.state", "in.vintage", "in.building_type"}
+
+    def test_accepts_none_inputs(self) -> None:
+        df = self._df()
+        assert groupable_columns(
+            df, filter_columns=None, additional_columns=["in.state"]
+        ) == ["in.state"]
+        assert groupable_columns(
+            df, filter_columns=["in.vintage"], additional_columns=None
+        ) == ["in.vintage"]
+        assert groupable_columns(df, filter_columns=None, additional_columns=None) == []
+
+    def test_preserves_order_filter_then_additional(self) -> None:
+        """For UI stability the helper should return filter columns first
+        (in their given order) and then additional columns (in their given
+        order). This keeps the selectbox order predictable across reruns.
+        """
+        df = self._df()
+        cols = groupable_columns(
+            df,
+            filter_columns=["in.vintage", "in.state"],
+            additional_columns=["in.building_type"],
+        )
+        assert cols == ["in.vintage", "in.state", "in.building_type"]
