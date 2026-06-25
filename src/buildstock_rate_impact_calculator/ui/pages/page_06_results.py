@@ -71,53 +71,19 @@ def render_results_page(app_state: AppState) -> None:
     if st.session_state.pop("_navigate_to_results", False):
         st.info("📂 Results loaded from project — displaying below.")
 
-    # ── Group-by selector + pills filter ──────────────────────────────────────
+    # ── Group-by selector ─────────────────────────────────────────────────────
     st.subheader("Grouping")
-    from buildstock_rate_impact_calculator.billing.results import (
-        filter_df_by_group_values,
-        groupable_columns,
-    )
+    from buildstock_rate_impact_calculator.billing.results import _META_COLUMNS
 
-    # Eligible grouping columns = (dataset filter_columns ∪ user additional
-    # columns) ∩ df.columns. Centralized in ``groupable_columns`` for testing.
-    _cfg = BuildStockDataManager.DATASET_CONFIGS[_config_key]
-    available_groups = groupable_columns(
-        df,
-        filter_columns=_cfg.filter_columns,
-        additional_columns=app_state.additional_columns,
-    )
+    available_groups = [c for c in df.columns if c not in _META_COLUMNS]
     group_options = ["None"] + available_groups
     chosen_group = st.selectbox(
         "Group results by",
         options=group_options,
         index=0,
-        help=(
-            "Choose a column to break down results (e.g. building_type, "
-            "state). Toggle pills below to restrict to a subset of values."
-        ),
+        help="Choose a column to break down results (e.g. building_type, state).",
     )
     group_col = None if chosen_group == "None" else chosen_group
-
-    selected_values: list = []
-    if group_col is not None:
-        unique_values = df[group_col].drop_nulls().unique().sort().to_list()
-        if unique_values:
-            selected_values = (
-                st.pills(
-                    f"Filter by {group_col}",
-                    options=unique_values,
-                    selection_mode="multi",
-                    default=[],
-                    help=(
-                        "Pick one or more values to filter results to that "
-                        "subset. Leave empty to keep all values."
-                    ),
-                )
-                or []
-            )
-
-    # Apply pill filter (no-op when no values are selected).
-    df = filter_df_by_group_values(df, group_col, selected_values)
 
     from buildstock_rate_impact_calculator.billing.results import (
         summarize_bills,
