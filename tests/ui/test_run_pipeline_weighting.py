@@ -194,6 +194,9 @@ def _make_mock_mgr(
     mgr.get_fuel_columns_for_type.side_effect = lambda ft: (
         BuildStockDataManager.get_fuel_columns_for_type(mgr, ft)
     )
+    mgr.fuel_timeseries_column.side_effect = lambda ft: (
+        BuildStockDataManager.fuel_timeseries_column(mgr, ft)
+    )
     return mgr
 
 
@@ -268,14 +271,16 @@ class TestCalculateFuelBillsComstock:
         bills = df.sort("_row_uid")["natural_gas_bill"].to_list()
         assert bills == pytest.approx([100.0 * 0.4, 200.0 * 0.6, 300.0 * 1.0])
 
-    def test_rate_mode_multiplies_bill_by_weight_for_comstock(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """ComStock rate-mode: per-row bill = calculated_bill * weight."""
+    def test_rate_mode_multiplies_bill_by_weight_for_comstock(self) -> None:
+        """ComStock rate-mode: per-row load is scaled by weight before billing.
+
+        For a flat rate this is equivalent to ``bill * weight``; for a block
+        rate it differs (tier boundaries see weighted consumption).
+        """
         from buildstock_rate_impact_calculator.ui.pages.page_05_run import (
             _calculate_fuel_bills,
         )
-        from buildstock_rate_impact_calculator.rates import fuel_rate as fuel_rate_mod
+        from buildstock_rate_impact_calculator.rates.fuel_rate import kwh_per_unit
 
         ng_energy = "out.natural_gas.total.energy_consumption..kwh"
         fuel_meta = pl.DataFrame(
@@ -289,44 +294,102 @@ class TestCalculateFuelBillsComstock:
         )
         mgr = _make_mock_mgr("comstock", "2024_release_2", fuel_meta)
 
-        # Stub fuel_rate.calculate_fuel_bill to return a fixed per-building bill
-        def _fake_bill(energy: float, rate_dict: dict) -> dict:
-            # Return 10.0 / kWh regardless, so weight effect is visible
-            return {
-                "annual_fuel_bill": energy * 10.0,
-                "monthly_fuel_bills": [energy * 10.0 / 12.0] * 12,
-                "rate_name": "fake",
-            }
-
-        # Import path inside _calculate_fuel_bills uses `from ... import calculate_fuel_bill`.
-        # Patch the symbol at the module that imports it (page_05_run reimports per call).
-        monkeypatch.setattr(fuel_rate_mod, "calculate_fuel_bill", _fake_bill)
+        rate_dict = {
+            "name": "TestFlat",
+            "fuel_type": "natural_gas",
+            "fixed_monthly_charge": 0.0,
+            "is_block_rate": False,
+            "flat_rate": 1.0,
+            "rate_unit": "$/Therm",
+        }
+        kph = kwh_per_unit("natural_gas", "$/Therm")
 
         tracker = MagicMock()
         df = _calculate_fuel_bills(
             mgr=mgr,
             building_ids=[1, 2],
             upgrade_id=0,
-            fuel_rate_assignments_for_scenario={"natural_gas": {"name": "fake"}},
+            fuel_rate_assignments_for_scenario={"natural_gas": rate_dict},
             tracker=tracker,
         )
         assert df is not None
         bills = df.sort("bldg_id")["natural_gas_bill"].to_list()
-        # bldg 1: 100 * 10 * 0.5 = 500; bldg 2: 200 * 10 * 2.0 = 4000
-        assert bills == pytest.approx([500.0, 4000.0])
+        # bldg 1: weighted_kwh = 100*0.5 = 50 → 50/kph $; bldg 2: 200*2 = 400 → 400/kph $
+        assert bills == pytest.approx([50.0 / kph, 400.0 / kph])
+        names = df["natural_gas_rate_name"].unique().to_list()
+        assert names == ["TestFlat"]
+
+    def test_block_rate_uses_monthly_fuel_data_and_weight_for_comstock(self) -> None:
+        """ComStock block-rate: monthly kWh × weight goes into tiered calc."""
+        from buildstock_rate_impact_calculator.ui.pages.page_05_run import (
+            _calculate_fuel_bills,
+        )
+        from buildstock_rate_impact_calculator.rates.fuel_rate import kwh_per_unit
+
+        ng_energy = "out.natural_gas.total.energy_consumption..kwh"
+        fuel_meta = pl.DataFrame(
+            {
+                "bldg_id": [1],
+                "weight": [2.0],
+                ng_energy: [1200.0],
+                "in.county": ["A"],
+                "in.puma": [None],
+            }
+        )
+        mgr = _make_mock_mgr("comstock", "2024_release_2", fuel_meta)
+
+        ts_col = "out.natural_gas.total.energy_consumption"
+        # 12 monthly values: 100 kWh per month (constant)
+        monthly_df = pl.DataFrame(
+            {
+                "timestamp": [None] * 12,
+                ts_col: [100.0] * 12,
+            }
+        )
+        monthly_fuel_data = {"1_0": monthly_df}
+
+        # Two-tier block: first 1 Therm @ $1, rest @ $5
+        rate_dict = {
+            "name": "TestBlock",
+            "fuel_type": "natural_gas",
+            "fixed_monthly_charge": 0.0,
+            "is_block_rate": True,
+            "block_unit": "$/Therm",
+            "blocks": [
+                {"consumption_limit": 1.0, "rate": 1.0},
+                {"consumption_limit": None, "rate": 5.0},
+            ],
+        }
+        kph = kwh_per_unit("natural_gas", "$/Therm")
+
+        tracker = MagicMock()
+        df = _calculate_fuel_bills(
+            mgr=mgr,
+            building_ids=[1],
+            upgrade_id=0,
+            fuel_rate_assignments_for_scenario={"natural_gas": rate_dict},
+            tracker=tracker,
+            monthly_fuel_data=monthly_fuel_data,
+        )
+        assert df is not None
+        # Per month: weighted_kwh = 100 * 2 = 200 → 200/kph Therms ≈ 6.823.
+        # Tier 1: 1.0 Therm × $1; tier 2: (200/kph - 1) Therm × $5.
+        monthly_units = 200.0 / kph
+        tier1 = 1.0 * 1.0
+        tier2 = (monthly_units - 1.0) * 5.0
+        expected_annual = (tier1 + tier2) * 12.0
+        assert df["natural_gas_bill"].to_list()[0] == pytest.approx(expected_annual)
 
 
 class TestCalculateFuelBillsResstock:
     """ResStock fuel-bill behavior is unchanged from Phase 1 (per-building, dedup)."""
 
-    def test_rate_mode_unchanged_for_resstock(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_rate_mode_unchanged_for_resstock(self) -> None:
         """ResStock rate-mode bills are NOT multiplied by weight (scalar applied later)."""
         from buildstock_rate_impact_calculator.ui.pages.page_05_run import (
             _calculate_fuel_bills,
         )
-        from buildstock_rate_impact_calculator.rates import fuel_rate as fuel_rate_mod
+        from buildstock_rate_impact_calculator.rates.fuel_rate import kwh_per_unit
 
         ng_energy = "out.natural_gas.total.energy_consumption..kwh"
         fuel_meta = pl.DataFrame(
@@ -338,27 +401,28 @@ class TestCalculateFuelBillsResstock:
         )
         mgr = _make_mock_mgr("resstock", "2025_release_1", fuel_meta)
 
-        def _fake_bill(energy: float, rate_dict: dict) -> dict:
-            return {
-                "annual_fuel_bill": energy * 10.0,
-                "monthly_fuel_bills": [energy * 10.0 / 12.0] * 12,
-                "rate_name": "fake",
-            }
-
-        monkeypatch.setattr(fuel_rate_mod, "calculate_fuel_bill", _fake_bill)
+        rate_dict = {
+            "name": "TestFlat",
+            "fuel_type": "natural_gas",
+            "fixed_monthly_charge": 0.0,
+            "is_block_rate": False,
+            "flat_rate": 1.0,
+            "rate_unit": "$/Therm",
+        }
+        kph = kwh_per_unit("natural_gas", "$/Therm")
 
         tracker = MagicMock()
         df = _calculate_fuel_bills(
             mgr=mgr,
             building_ids=[1, 2],
             upgrade_id=0,
-            fuel_rate_assignments_for_scenario={"natural_gas": {"name": "fake"}},
+            fuel_rate_assignments_for_scenario={"natural_gas": rate_dict},
             tracker=tracker,
         )
         assert df is not None
         bills = df.sort("bldg_id")["natural_gas_bill"].to_list()
         # ResStock: per-building bill, NO weight multiplication
-        assert bills == pytest.approx([1000.0, 2000.0])
+        assert bills == pytest.approx([100.0 / kph, 200.0 / kph])
 
     def test_default_mode_unchanged_for_resstock(self) -> None:
         """ResStock default-mode bills are stored as-is (no weight applied)."""

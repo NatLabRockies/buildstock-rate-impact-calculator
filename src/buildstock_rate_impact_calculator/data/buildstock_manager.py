@@ -39,6 +39,9 @@ from buildstock_rate_impact_calculator.core.logger_config import (
     setup_logging,
     LogMessages,
 )
+from buildstock_rate_impact_calculator.data.data_dictionary import (
+    fetch_data_dictionary,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +89,7 @@ class DatasetConfig:
     # Filename template for sub-state metadata files, formatted with
     # {state} (USPS abbr), {level} ('county'/'puma'), {geo_id} (GISJOIN), {token}
     geo_filename: str = (
-        "state={state}/{level}={geo_id}/{state}_{geo_id}_{token}_agg.parquet"
+        "state={state}/{level}={geo_id}/{state}_{geo_id}_{token}.parquet"
     )
     geo_baseline_token: str = ""  # e.g. "upgrade0" or "baseline"
     geo_upgrade_token: str = (
@@ -254,9 +257,9 @@ class BuildStockDataManager:
             supported_upgrades=list(range(40)),  # 0-39 for ComStock
             # Full (not basic) aggregates: basic files lack the fuel energy columns.
             # Column projection via scan_parquet keeps downloads small regardless.
-            metadata_path="metadata_and_annual_results_aggregates/national/full/parquet",
-            baseline_filename="baseline_agg.parquet",
-            upgrade_filename="upgrade{upgrade_id:02d}_agg.parquet",
+            metadata_path="metadata_and_annual_results/by_state_and_county/full/parquet",
+            baseline_filename="baseline.parquet",
+            upgrade_filename="upgrade{upgrade_id:02d}.parquet",
             natural_gas_energy_column="out.natural_gas.total.energy_consumption..kwh",
             natural_gas_bill_column="out.utility_bills.natural_gas_bill..usd",
             propane_energy_column="out.propane.total.energy_consumption..kwh",
@@ -273,8 +276,8 @@ class BuildStockDataManager:
                 "in.hvac_system_type",
             ],
             geo_metadata_paths={
-                "county": "metadata_and_annual_results_aggregates/by_state_and_county/full/parquet",
-                "puma": "metadata_and_annual_results_aggregates/by_state_and_puma/full/parquet",
+                "county": "metadata_and_annual_results/by_state_and_county/full/parquet",
+                "puma": "metadata_and_annual_results/by_state_and_puma/full/parquet",
             },
             geo_baseline_token="baseline",
             geo_upgrade_token="upgrade{upgrade_id:02d}",
@@ -294,9 +297,9 @@ class BuildStockDataManager:
             supported_upgrades=list(range(40)),  # 0-39 for ComStock
             # Full (not basic) aggregates: basic files lack the fuel energy columns.
             # Column projection via scan_parquet keeps downloads small regardless.
-            metadata_path="metadata_and_annual_results_aggregates/national/full/parquet",
-            baseline_filename="upgrade0_agg.parquet",
-            upgrade_filename="upgrade{upgrade_id}_agg.parquet",
+            metadata_path="metadata_and_annual_results/by_state_and_county/full/parquet",
+            baseline_filename="upgrade0.parquet",
+            upgrade_filename="upgrade{upgrade_id}.parquet",
             natural_gas_energy_column="out.natural_gas.total.energy_consumption..kwh",
             natural_gas_bill_column="calc.weighted.utility_bills.natural_gas_bill_state_average..billion_usd",
             propane_energy_column="out.propane.total.energy_consumption..kwh",
@@ -313,8 +316,8 @@ class BuildStockDataManager:
                 "in.hvac_system_type",
             ],
             geo_metadata_paths={
-                "county": "metadata_and_annual_results_aggregates/by_state_and_county/full/parquet",
-                "puma": "metadata_and_annual_results_aggregates/by_state_and_puma/full/parquet",
+                "county": "metadata_and_annual_results/by_state_and_county/full/parquet",
+                "puma": "metadata_and_annual_results/by_state_and_puma/full/parquet",
             },
             geo_baseline_token="upgrade0",
             geo_upgrade_token="upgrade{upgrade_id}",
@@ -611,31 +614,31 @@ class BuildStockDataManager:
 
     def get_input_characteristic_columns(self) -> List[str]:
         """Return the sorted list of ``in.*`` characteristic columns available
-        in the dataset's metadata schema.
+        in the dataset's data dictionary.
 
         Used by the UI to populate the "Additional Characteristics" multiselect
-        on the Building Filter page. Results are cached on the instance so
-        repeated calls are free; the underlying schema fetch is a single
-        ``scan_parquet`` against the baseline metadata URI (column projection,
-        no row download).
+        on the Building Filter page. Reads the dataset's ``data_dictionary.tsv``
+        via :func:`fetch_data_dictionary` (cached on disk under
+        ``{cache_dir}/metadata/{dataset_type}_{release}/``), so no metadata
+        Parquet scan is required. Results are cached on the instance so
+        repeated calls are free.
         """
         cached = getattr(self, "_input_cols_cache", None)
         if cached is not None:
             return cached
         try:
-            uri = self.metadata_uri
-            storage = (
-                None if "://" not in uri or uri.startswith("file://") else self._S3_ANON
+            data_dict = fetch_data_dictionary(
+                base_uri=self.config.base_uri,
+                cache_dir=getattr(self, "cache_dir", Path("./buildstock_cache")),
+                dataset_type=self.dataset_type,
+                release=self.release,
             )
-            lf = (
-                pl.scan_parquet(uri, storage_options=storage)
-                if storage
-                else pl.scan_parquet(uri)
-            )
-            schema_cols = list(lf.collect_schema().keys())
-            in_cols = sorted(c for c in schema_cols if c.startswith("in."))
+            in_cols = sorted(c for c in data_dict.keys() if c.startswith("in."))
         except Exception as exc:
-            self.logger.warning(f"Could not enumerate input columns from {uri}: {exc}")
+            self.logger.warning(
+                f"Could not enumerate input columns from data dictionary "
+                f"for {self.dataset_type} {self.release}: {exc}"
+            )
             in_cols = []
         self._input_cols_cache = in_cols
         return in_cols
@@ -664,6 +667,24 @@ class BuildStockDataManager:
             getattr(self.config, energy_attr, None),
             getattr(self.config, bill_attr, None),
         )
+
+    def fuel_timeseries_column(self, fuel_type: str) -> Optional[str]:
+        """Return the hourly timeseries column name for the given fuel.
+
+        Timeseries Parquet files use the same fuel-energy column name as the
+        annual metadata column, but without the unit suffix:
+            * ``out.natural_gas.total.energy_consumption..kwh``  → strip ``..kwh``
+            * ``out.natural_gas.total.energy_consumption.kwh``   → strip ``.kwh``
+              (resstock_2024_release_2 uses a single dot)
+        Returns ``None`` if the dataset does not provide this fuel.
+        """
+        energy_col, _ = self.get_fuel_columns_for_type(fuel_type)
+        if not energy_col:
+            return None
+        for suffix in ("..kwh", ".kwh"):
+            if energy_col.endswith(suffix):
+                return energy_col[: -len(suffix)]
+        return energy_col
 
     def _deduplicate_columns(self, requested_columns: List[str]) -> List[str]:
         """
@@ -1409,16 +1430,23 @@ class BuildStockDataManager:
         cancel_event: Optional[Any] = None,
         load_column: Optional[str] = None,
         timestamp_column: str = "timestamp",
+        monthly_fuel_columns: Optional[List[str]] = None,
     ) -> Dict[str, "pl.DataFrame"]:
         """
         Download timeseries parquet files for given buildings/upgrades with progress
         callbacks and cancellation support.
 
-        Only the timestamp and load columns are fetched from each remote file, and
-        values are aggregated to hourly resolution before being written locally.
-        Files are written to output_dir as ``{building_id}_{upgrade}.parquet``.
-        If cancel_event is set before or during download, any files already written
-        to output_dir by this call are deleted and an empty dict is returned.
+        Only the timestamp + load column (+ any ``monthly_fuel_columns``) are
+        fetched from each remote file. The load column is aggregated to hourly
+        and written to ``{building_id}_{upgrade}.parquet``. When
+        ``monthly_fuel_columns`` is non-empty, those columns are aggregated to
+        monthly totals (sum per calendar month) and written to a companion file
+        ``{building_id}_{upgrade}_monthly_fuel.parquet`` so block-rate fuel
+        bills can be computed without re-scanning the remote file.
+
+        If cancel_event is set before or during download, any files already
+        written to ``output_dir`` by this call are deleted and an empty dict is
+        returned.
 
         Args:
             building_ids: List of building IDs to download.
@@ -1430,16 +1458,22 @@ class BuildStockDataManager:
             load_column: Name of the energy consumption column to read. Defaults to
                          the dataset's configured default load column.
             timestamp_column: Name of the timestamp column. Defaults to 'timestamp'.
+            monthly_fuel_columns: Optional list of additional timeseries columns
+                (e.g. ``out.natural_gas.total.energy_consumption``) to fetch in
+                the same Parquet scan, aggregate to monthly totals, and write to
+                a companion ``*_monthly_fuel.parquet`` file. Missing columns are
+                skipped per file (some buildings may not have all fuels).
 
         Returns:
-            Dict mapping ``"{building_id}_{upgrade}"`` to the loaded DataFrame
-            (hourly, with only timestamp and load columns).
-            Empty dict if cancelled before any downloads completed.
+            Dict mapping ``"{building_id}_{upgrade}"`` to the loaded hourly
+            DataFrame (timestamp + load_col). Empty dict if cancelled before
+            any downloads completed.
         """
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
         load_col = load_column or self.config.default_load_column
+        fuel_cols = list(monthly_fuel_columns or [])
 
         tasks = []
         for building_id in building_ids:
@@ -1464,12 +1498,32 @@ class BuildStockDataManager:
 
         def _fetch_one(
             building_id: Any, upgrade: int, uri: str
-        ) -> Optional[Tuple[str, pl.DataFrame, Path]]:
-            """Fetch two columns from S3 via Parquet projection, aggregate, write locally."""
+        ) -> Optional[Tuple[str, pl.DataFrame, List[Path]]]:
+            """Fetch needed columns from S3 via Parquet projection, aggregate, write locally."""
             if cancel_event is not None and cancel_event.is_set():
                 return None
-            df = (
-                pl.scan_parquet(uri, storage_options=self._S3_ANON)
+            scan = pl.scan_parquet(uri, storage_options=self._S3_ANON)
+            # Detect which fuel columns are actually present (column projection
+            # would otherwise raise on missing names).
+            present_fuel_cols: List[str] = []
+            if fuel_cols:
+                try:
+                    schema_names = set(scan.collect_schema().names())
+                    present_fuel_cols = [c for c in fuel_cols if c in schema_names]
+                except Exception:
+                    present_fuel_cols = []
+
+            select_cols = [timestamp_column, load_col, *present_fuel_cols]
+            # Single remote scan that pulls all required columns at once.
+            ts_df = (
+                scan.select(select_cols)
+                .with_columns(pl.col(timestamp_column).cast(pl.Datetime))
+                .collect()
+            )
+
+            # Hourly aggregate of the electricity load column.
+            hourly_df = (
+                ts_df.lazy()
                 .select([timestamp_column, load_col])
                 .group_by_dynamic(
                     pl.col(timestamp_column),
@@ -1481,8 +1535,30 @@ class BuildStockDataManager:
                 .collect()
             )
             out_path = output_dir / f"{building_id}_{upgrade}.parquet"
-            df.write_parquet(out_path)
-            return f"{building_id}_{upgrade}", df, out_path
+            hourly_df.write_parquet(out_path)
+            written: List[Path] = [out_path]
+
+            # Monthly aggregate of fuel columns (if any present).
+            if present_fuel_cols:
+                monthly_df = (
+                    ts_df.lazy()
+                    .select([timestamp_column, *present_fuel_cols])
+                    .group_by_dynamic(
+                        pl.col(timestamp_column),
+                        every="1mo",
+                        closed="right",
+                        label="right",
+                    )
+                    .agg([pl.col(c).sum() for c in present_fuel_cols])
+                    .collect()
+                )
+                monthly_path = (
+                    output_dir / f"{building_id}_{upgrade}_monthly_fuel.parquet"
+                )
+                monthly_df.write_parquet(monthly_path)
+                written.append(monthly_path)
+
+            return f"{building_id}_{upgrade}", hourly_df, written
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             future_to_task = {
@@ -1513,10 +1589,10 @@ class BuildStockDataManager:
                 if result is None:
                     continue
 
-                key, df, out_path = result
+                key, df, out_paths = result
                 with lock:
                     results[key] = df
-                    written_files.append(out_path)
+                    written_files.extend(out_paths)
                     done_count += 1
                     current = done_count
 
@@ -1560,6 +1636,50 @@ class BuildStockDataManager:
                         results[f"{building_id}_{upgrade}"] = pl.read_parquet(path)
                     except Exception as exc:
                         self.logger.warning(f"Could not read cached file {path}: {exc}")
+        return results
+
+    def load_cached_monthly_fuel(
+        self,
+        building_ids: List[Any],
+        upgrades: List[int],
+        output_dir: Path,
+    ) -> Dict[str, "pl.DataFrame"]:
+        """
+        Load previously-downloaded monthly-fuel companion parquet files.
+
+        Looks for ``{building_id}_{upgrade}_monthly_fuel.parquet`` in
+        ``output_dir``. Returns only files that exist; missing ones are
+        skipped (e.g. when a building has no fuel columns or block-rate
+        billing was not configured at download time).
+
+        Args:
+            building_ids: List of building IDs to look up.
+            upgrades: List of upgrade scenario IDs.
+            output_dir: Directory that was passed to
+                ``download_timeseries_with_progress``.
+
+        Returns:
+            Dict mapping ``"{building_id}_{upgrade}"`` to a DataFrame with the
+            timestamp column and one column per fuel timeseries column, at
+            monthly resolution (12 rows).
+        """
+        output_dir = Path(output_dir)
+        results: Dict[str, pl.DataFrame] = {}
+        for building_id in building_ids:
+            for upgrade in upgrades:
+                path = (
+                    output_dir
+                    / f"{building_id}_{upgrade}_monthly_fuel.parquet"
+                )
+                if path.exists():
+                    try:
+                        results[f"{building_id}_{upgrade}"] = pl.read_parquet(
+                            path
+                        )
+                    except Exception as exc:
+                        self.logger.warning(
+                            f"Could not read cached monthly-fuel file {path}: {exc}"
+                        )
         return results
 
     def get_building_state(self, building_id: Any) -> Optional[str]:

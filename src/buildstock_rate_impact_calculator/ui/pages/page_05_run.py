@@ -9,6 +9,7 @@ progress feedback. Supports cancellation.
 from __future__ import annotations
 import os
 import threading
+from typing import Any
 
 import streamlit as st
 import polars as pl
@@ -50,9 +51,11 @@ def _assign_row_uid(
     """Add a ``_row_uid`` column that uniquely identifies each metadata row.
 
     For ComStock the same ``bldg_id`` can appear in multiple geographic
-    aggregates (county / PUMA) with different ``weight`` values. The uid
-    concatenates ``bldg_id``, ``in.county`` and ``in.puma`` so the electricity
-    and fuel-bill DataFrames can be joined safely on a stable per-row key.
+    aggregates (county / PUMA) with different ``weight`` values, and the same
+    ``(bldg_id, county, puma, weight)`` combination can recur across rows.
+    The uid therefore concatenates ``bldg_id``, ``in.county``, ``in.puma``,
+    ``weight`` AND the original row index so it is guaranteed unique per
+    metadata row.
 
     For ResStock each row corresponds to a unique ``bldg_id``, so the uid is
     just the ``bldg_id`` as a string.
@@ -69,13 +72,24 @@ def _assign_row_uid(
             if "in.puma" in metadata.columns
             else pl.lit("")
         )
+        weight_expr = (
+            pl.col("weight").cast(pl.Utf8).fill_null("")
+            if "weight" in metadata.columns
+            else pl.lit("")
+        )
+        metadata = metadata.with_row_index("__row_idx")
         uid_expr = pl.concat_str(
-            [bldg_expr, county_expr, puma_expr],
+            [
+                bldg_expr,
+                county_expr,
+                puma_expr,
+                weight_expr,
+                pl.col("__row_idx").cast(pl.Utf8),
+            ],
             separator="|",
         )
-    else:
-        uid_expr = bldg_expr
-    return metadata.with_columns(uid_expr.alias("_row_uid"))
+        return metadata.with_columns(uid_expr.alias("_row_uid")).drop("__row_idx")
+    return metadata.with_columns(bldg_expr.alias("_row_uid"))
 
 
 def _build_load_records(
@@ -152,126 +166,228 @@ def _calculate_fuel_bills(
     upgrade_id: int,
     fuel_rate_assignments_for_scenario: dict,
     tracker: ProgressTracker,
+    monthly_fuel_data: dict[str, pl.DataFrame] | None = None,
 ) -> pl.DataFrame | None:
     """Load upgrade metadata and calculate fuel bills for all buildings.
 
+    The calculation is fully vectorized via Polars expressions; no per-row
+    Python iteration is performed.
+
     For **ComStock**, each metadata row is processed independently (no dedup)
-    so per-row weights are preserved. Rate-mode bills are multiplied by the
-    row weight; default-mode bills are passed through
-    ``convert_default_fuel_bill`` (which applies the per-release storage
-    policy — see [billing/conversions.py]).
+    so per-row weights are preserved. Energy consumption (both annual and
+    monthly) is multiplied by the row ``weight`` *before* the rate expression
+    is applied, so block-rate tier boundaries see real-world weighted
+    consumption. Default-mode bills are passed through the per-release
+    storage policy (see [billing/conversions.py]).
 
     For **ResStock**, metadata is deduped to one row per ``bldg_id`` and
     bills are stored per-building (the scalar dataset weight is applied at
     aggregation time, not here).
 
-    Returns a Polars DataFrame with columns:
-        bldg_id, upgrade, _row_uid,
-        natural_gas_bill, natural_gas_rate_name,
-        propane_bill,      propane_rate_name,
-        fuel_oil_bill,     fuel_oil_rate_name
-    or None if no fuel data was available.
+    Args:
+        mgr: Active ``BuildStockDataManager``.
+        building_ids: Buildings to include.
+        upgrade_id: Upgrade scenario being billed.
+        fuel_rate_assignments_for_scenario: ``{fuel_type: rate_dict_or_None}``.
+            A value of ``None`` means use the dataset's default fuel-bill
+            column.
+        tracker: Progress tracker for status messages.
+        monthly_fuel_data: Optional ``{"{bldg_id}_{upgrade}": DataFrame}``
+            mapping where each DataFrame holds monthly-summed fuel kWh (12
+            rows × N fuel-timeseries columns). Required only when at least
+            one assigned fuel rate has ``is_block_rate=True``.
+
+    Returns:
+        Polars DataFrame with columns
+        ``bldg_id, upgrade, _row_uid,
+        <fuel>_bill, <fuel>_rate_name`` (one pair per assigned fuel),
+        or ``None`` if no fuel data was available.
     """
     from buildstock_rate_impact_calculator.rates.fuel_rate import (
         FUEL_TYPES,
-        calculate_fuel_bill,
-    )
-    from buildstock_rate_impact_calculator.billing.conversions import (
-        convert_default_fuel_bill,
+        fuel_bill_expr,
     )
 
     dataset_type = mgr.config.dataset_type or ""
+    bldg_col = mgr.config.building_id_column
 
-    fuel_type_columns: list[tuple[str, str, str | None, str | None]] = []
-    # (fuel_type, mode, column_name, rate_dict_or_None)
+    # Per-fuel plan: (fuel_type, mode, metadata_col, rate_dict_or_None,
+    # ts_col_or_None) where mode is "rate" or "default".
+    fuel_plan: list[tuple[str, str, str, dict | None, str | None]] = []
+    block_rate_fuels: list[tuple[str, str]] = []  # (fuel_type, ts_col)
     for ft in FUEL_TYPES:
         energy_col, bill_col = mgr.get_fuel_columns_for_type(ft)
-        rate_dict = fuel_rate_assignments_for_scenario.get(ft)  # None = dataset default
+        rate_dict = fuel_rate_assignments_for_scenario.get(ft)  # None = default
         if rate_dict is not None and energy_col:
-            fuel_type_columns.append((ft, "rate", energy_col, rate_dict))
+            ts_col = (
+                mgr.fuel_timeseries_column(ft)
+                if rate_dict.get("is_block_rate", False)
+                else None
+            )
+            fuel_plan.append((ft, "rate", energy_col, rate_dict, ts_col))
+            if ts_col is not None:
+                block_rate_fuels.append((ft, ts_col))
         elif rate_dict is None and bill_col:
-            fuel_type_columns.append((ft, "default", bill_col, None))
+            fuel_plan.append((ft, "default", bill_col, None, None))
         # If neither column exists for this fuel type, skip silently
 
-    if not fuel_type_columns:
+    if not fuel_plan:
         return None
 
-    bldg_col = mgr.config.building_id_column
-    needed_cols = [bldg_col, "weight"] + [col for _, _, col, _ in fuel_type_columns]
-    # Geographic cols help build a stable _row_uid (only used by ComStock).
+    # ── load metadata (geo-aware, column-projected) ────────────────────────
+    needed_cols: list[str] = [bldg_col, "weight"]
+    for _, _, col_name, _, _ in fuel_plan:
+        if col_name not in needed_cols:
+            needed_cols.append(col_name)
     for geo_col in ("in.county", "in.puma"):
         if geo_col not in needed_cols:
             needed_cols.append(geo_col)
 
     try:
         tracker.update(
-            0, message=f"Loading fuel/default bill data for upgrade {upgrade_id}…"
+            0,
+            message=f"Loading fuel/default bill data for upgrade {upgrade_id}…",
         )
-        # Geo-resolution-aware load with column projection: only the needed
-        # columns are downloaded, and ComStock county/PUMA selections read the
-        # per-geometry aggregate files. Missing columns are skipped per file.
         upgrade_meta = mgr.load_upgrade_metadata(upgrade_id, columns=needed_cols)
-
-        # Filter to selected buildings
         upgrade_meta = upgrade_meta.filter(pl.col(bldg_col).is_in(building_ids))
-        # ResStock: dedup so we get one row per bldg_id. ComStock: keep per-row
-        # weight by NOT deduping.
         if dataset_type != "comstock":
             upgrade_meta = upgrade_meta.unique(subset=[bldg_col])
         upgrade_meta = _assign_row_uid(upgrade_meta, dataset_type, bldg_col)
-
     except Exception as exc:
         tracker.update(
             0,
-            message=f"Warning: Could not load fuel metadata for upgrade {upgrade_id}: {exc}",
+            message=(
+                f"Warning: Could not load fuel metadata for upgrade {upgrade_id}: {exc}"
+            ),
         )
         return None
 
-    # Build result rows
-    rows: list[dict] = []
-    for row in upgrade_meta.iter_rows(named=True):
-        bldg_id = row[bldg_col]
-        row_uid = row.get("_row_uid")
-        weight_raw = row.get("weight")
-        weight = float(weight_raw) if weight_raw is not None else 1.0
-
-        result_row: dict = {
-            "bldg_id": bldg_id,
-            "upgrade": upgrade_id,
-            "_row_uid": row_uid,
-        }
-
-        for ft, mode, col_name, rate_dict in fuel_type_columns:
-            if col_name not in row:
-                result_row[f"{ft}_bill"] = None
-                result_row[f"{ft}_rate_name"] = None
-                continue
-
-            raw_val = row.get(col_name)
-            value = float(raw_val) if raw_val is not None else 0.0
-
-            if mode == "rate":
-                bill_result = calculate_fuel_bill(value, rate_dict)
-                annual_bill = bill_result["annual_fuel_bill"]
-                # ComStock: per-row bill scales with weight to match the
-                # weighted-electricity storage policy.
-                if dataset_type == "comstock":
-                    annual_bill = annual_bill * weight
-                result_row[f"{ft}_bill"] = annual_bill
-                result_row[f"{ft}_rate_name"] = bill_result["rate_name"]
-            else:
-                # Dataset default — apply per-release conversion policy.
-                result_row[f"{ft}_bill"] = convert_default_fuel_bill(
-                    value, mgr.config, weight
-                )
-                result_row[f"{ft}_rate_name"] = "dataset default"
-
-        rows.append(result_row)
-
-    if not rows:
+    if upgrade_meta.height == 0:
         return None
 
-    return pl.DataFrame(rows)
+    # Drop any fuels whose metadata column is missing in the loaded frame
+    # (e.g. requested column was projected out by a per-geo aggregate file).
+    fuel_plan = [p for p in fuel_plan if p[2] in upgrade_meta.columns]
+    if not fuel_plan:
+        return None
+    block_rate_fuels = [
+        (ft, ts_col)
+        for ft, _mode, _col, _rate, ts_col in fuel_plan
+        if ts_col is not None
+    ]
+
+    # ── join monthly fuel totals for block-rate fuels ──────────────────────
+    monthly_col_names: dict[tuple[str, int], str] = {}
+    if block_rate_fuels:
+        if monthly_fuel_data is None:
+            monthly_fuel_data = {}
+        # Build a per-fuel monthly-totals DataFrame keyed by bldg_id, then
+        # join onto upgrade_meta. For non-applicable buildings the caller
+        # passes the baseline monthly_fuel_data entry.
+        per_bldg_rows: dict[Any, dict[str, float]] = {}
+        for bldg_id in upgrade_meta[bldg_col].to_list():
+            key = f"{bldg_id}_{upgrade_id}"
+            if key not in monthly_fuel_data:
+                # Fall back to baseline timeseries (mirrors electricity path).
+                key = f"{bldg_id}_0"
+            df = monthly_fuel_data.get(key)
+            if df is None or df.height == 0:
+                continue
+            row_dict: dict[str, float] = {}
+            for _, ts_col in block_rate_fuels:
+                if ts_col not in df.columns:
+                    continue
+                values = df[ts_col].to_list()
+                # Pad / truncate to exactly 12 monthly values.
+                values = (list(values) + [0.0] * 12)[:12]
+                for month_idx, val in enumerate(values, start=1):
+                    col_name = f"_monthly_kwh__{ts_col}__{month_idx:02d}"
+                    row_dict[col_name] = float(val) if val is not None else 0.0
+                    monthly_col_names[(ts_col, month_idx)] = col_name
+            if row_dict:
+                per_bldg_rows[bldg_id] = row_dict
+
+        if per_bldg_rows:
+            all_cols = sorted({c for d in per_bldg_rows.values() for c in d})
+            ids_in_order = list(per_bldg_rows.keys())
+            data: dict[str, list] = {bldg_col: ids_in_order}
+            for col in all_cols:
+                data[col] = [per_bldg_rows[bid].get(col, 0.0) for bid in ids_in_order]
+            monthly_df = pl.DataFrame(data)
+            upgrade_meta = upgrade_meta.join(monthly_df, on=bldg_col, how="left")
+            # Fill nulls (buildings without monthly data) with 0.
+            upgrade_meta = upgrade_meta.with_columns(
+                [pl.col(c).fill_null(0.0) for c in all_cols]
+            )
+        else:
+            # No monthly data available; ensure expected columns exist as 0.
+            for _, ts_col in block_rate_fuels:
+                for month_idx in range(1, 13):
+                    col_name = f"_monthly_kwh__{ts_col}__{month_idx:02d}"
+                    monthly_col_names[(ts_col, month_idx)] = col_name
+                    upgrade_meta = upgrade_meta.with_columns(
+                        pl.lit(0.0).alias(col_name)
+                    )
+
+    # ── build per-fuel result expressions ──────────────────────────────────
+    is_comstock = dataset_type == "comstock"
+    weight_expr = pl.col("weight").cast(pl.Float64).fill_null(0.0)
+
+    result_exprs: list[pl.Expr] = [
+        pl.col(bldg_col).alias("bldg_id"),
+        pl.lit(upgrade_id).alias("upgrade"),
+        pl.col("_row_uid"),
+    ]
+
+    for ft, mode, col_name, rate_dict, ts_col in fuel_plan:
+        bill_col = f"{ft}_bill"
+        rate_name_col = f"{ft}_rate_name"
+
+        if mode == "default":
+            value_expr = pl.col(col_name).cast(pl.Float64).fill_null(0.0)
+            release = mgr.config.release
+            if dataset_type == "resstock":
+                bill_expr = value_expr
+            elif dataset_type == "comstock" and release == "2024_release_2":
+                bill_expr = value_expr * weight_expr
+            elif dataset_type == "comstock" and release == "2025_release_3":
+                bill_expr = value_expr * pl.lit(1.0e9)
+            else:
+                raise ValueError(
+                    f"Cannot calculate default-mode fuel bill for unsupported "
+                    f"dataset ({dataset_type!r}, {release!r})."
+                )
+            result_exprs.append(bill_expr.alias(bill_col))
+            result_exprs.append(pl.lit("dataset default").alias(rate_name_col))
+            continue
+
+        # Rate mode — flat or block
+        rate_name = rate_dict.get("name", "Custom Fuel Rate") if rate_dict else ""
+        is_block = bool(rate_dict.get("is_block_rate", False)) if rate_dict else False
+
+        if is_block and ts_col is not None:
+            monthly_exprs: list[pl.Expr] = []
+            for month_idx in range(1, 13):
+                mcol = monthly_col_names.get((ts_col, month_idx))
+                if mcol is None or mcol not in upgrade_meta.columns:
+                    monthly_exprs.append(pl.lit(0.0))
+                else:
+                    raw = pl.col(mcol).cast(pl.Float64).fill_null(0.0)
+                    monthly_exprs.append(raw * weight_expr if is_comstock else raw)
+            bill_expr = fuel_bill_expr(
+                rate_dict, monthly_kwh_exprs=monthly_exprs
+            )
+        else:
+            annual_kwh = pl.col(col_name).cast(pl.Float64).fill_null(0.0)
+            if is_comstock:
+                annual_kwh = annual_kwh * weight_expr
+            bill_expr = fuel_bill_expr(rate_dict, annual_kwh_expr=annual_kwh)
+
+        result_exprs.append(bill_expr.alias(bill_col))
+        result_exprs.append(pl.lit(rate_name).alias(rate_name_col))
+
+    out = upgrade_meta.select(result_exprs)
+    return out if out.height > 0 else None
 
 
 def _run_pipeline(
@@ -361,6 +477,17 @@ def _run_pipeline(
         # ── download timeseries (or reload from cache) ───────────────────────
         ts_dir = output_dir / "timeseries" / app_state.release
 
+        # Determine which fuel timeseries columns are needed for block-rate
+        # billing across all scenarios. These are fetched in the same Parquet
+        # scan as the electricity load column and aggregated to monthly totals.
+        block_fuel_ts_cols: list[str] = []
+        for _scen_rates in resolved_fuel_rate_assignments.values():
+            for _ft, _rate_dict in (_scen_rates or {}).items():
+                if _rate_dict and _rate_dict.get("is_block_rate"):
+                    _ts_col = mgr.fuel_timeseries_column(_ft)
+                    if _ts_col and _ts_col not in block_fuel_ts_cols:
+                        block_fuel_ts_cols.append(_ts_col)
+
         # Build (building_id, upgrade) pairs to download.
         # Each upgrade only downloads timeseries for applicable buildings.
         # Unapplicable buildings fall back to baseline files during bill calculation,
@@ -376,11 +503,17 @@ def _run_pipeline(
                 # Unapplicable buildings need the baseline file for fall-back
                 _unapplicable_bids = set(building_ids) - _applicable_bids
                 all_pairs |= {(bldg, 0) for bldg in _unapplicable_bids}
-        cached_pairs = {
-            pair
-            for pair in all_pairs
-            if (ts_dir / f"{pair[0]}_{pair[1]}.parquet").exists()
-        }
+
+        def _is_cached(bldg: Any, upg: int) -> bool:
+            hourly_path = ts_dir / f"{bldg}_{upg}.parquet"
+            if not hourly_path.exists():
+                return False
+            if not block_fuel_ts_cols:
+                return True
+            monthly_path = ts_dir / f"{bldg}_{upg}_monthly_fuel.parquet"
+            return monthly_path.exists()
+
+        cached_pairs = {pair for pair in all_pairs if _is_cached(*pair)}
         missing_pairs = all_pairs - cached_pairs
 
         ts_data: dict[str, pl.DataFrame] = {}
@@ -431,6 +564,7 @@ def _run_pipeline(
                         output_dir=ts_dir,
                         progress_cb=dl_progress,
                         cancel_event=tracker.cancel_event,
+                        monthly_fuel_columns=block_fuel_ts_cols or None,
                     )
                 )
             if not tracker.is_cancelled():
@@ -444,6 +578,21 @@ def _run_pipeline(
             tracker.error("No timeseries data was downloaded.")
             return
 
+        # Load monthly-fuel companion files for all (bldg, upgrade) pairs in
+        # play. Empty when no block-rate fuel rates are configured.
+        monthly_fuel_data: dict[str, pl.DataFrame] = {}
+        if block_fuel_ts_cols:
+            pairs_by_upg: dict[int, list] = {}
+            for bldg, upg in all_pairs:
+                pairs_by_upg.setdefault(upg, []).append(bldg)
+            for upg, bldgs in pairs_by_upg.items():
+                monthly_fuel_data.update(
+                    mgr.load_cached_monthly_fuel(
+                        building_ids=bldgs,
+                        upgrades=[upg],
+                        output_dir=ts_dir,
+                    )
+                )
         # ── calculate electricity bills ───────────────────────────────────────
         load_column = mgr.config.default_load_column
         scalar_weight = app_state.resstock_weight  # None for ComStock
@@ -527,6 +676,7 @@ def _run_pipeline(
                 upgrade_id=upgrade_id,
                 fuel_rate_assignments_for_scenario=fuel_rates_for_scenario,
                 tracker=tracker,
+                monthly_fuel_data=monthly_fuel_data,
             )
             if fuel_df is not None:
                 fuel_frames.append(fuel_df)
