@@ -1025,6 +1025,23 @@ class UtilityBillCalculator:
             )
             monthly = list(monthly_raw) if monthly_raw is not None else [0.0] * 12
 
+            def _sum12(attr: str) -> float:
+                vals = getattr(model.Outputs, attr, None)
+                if isinstance(vals, (list, tuple)) and vals:
+                    return float(sum(vals))
+                return 0.0
+
+            monthly_peaks_out = getattr(
+                model.Outputs, "year1_monthly_peak_wo_system", None
+            )
+            peak_demand_kw = (
+                float(max(monthly_peaks_out))
+                if isinstance(monthly_peaks_out, (list, tuple))
+                and monthly_peaks_out
+                and any(p > 0 for p in monthly_peaks_out)
+                else 0.0
+            )
+
             row = {
                 "bldg_id": bldg_id,
                 "upgrade": upgrade,
@@ -1032,6 +1049,14 @@ class UtilityBillCalculator:
                 "annual_energy_kwh": annual_kwh,
                 "average_rate_ct_kwh": avg_rate,
                 "monthly_bills": str(monthly),
+                "annual_fixed_charge": _sum12("year1_monthly_fixed_without_system"),
+                "annual_energy_charge": _sum12(
+                    "year1_monthly_ec_charge_without_system"
+                ),
+                "annual_demand_charge": _sum12("year1_monthly_dc_fixed_without_system")
+                + _sum12("year1_monthly_dc_tou_without_system"),
+                "annual_min_charge": _sum12("year1_monthly_minimum_without_system"),
+                "peak_demand_kw": peak_demand_kw,
                 "error": None,
             }
             row.update(per_row_meta)
@@ -1047,6 +1072,11 @@ class UtilityBillCalculator:
                 "annual_energy_kwh": None,
                 "average_rate_ct_kwh": None,
                 "monthly_bills": None,
+                "annual_fixed_charge": None,
+                "annual_energy_charge": None,
+                "annual_demand_charge": None,
+                "annual_min_charge": None,
+                "peak_demand_kw": None,
                 "error": str(exc),
             }
             row.update(per_row_meta)
@@ -1160,6 +1190,11 @@ class UtilityBillCalculator:
                 "annual_energy_kwh": pl.Float64,
                 "average_rate_ct_kwh": pl.Float64,
                 "monthly_bills": pl.Utf8,
+                "annual_fixed_charge": pl.Float64,
+                "annual_energy_charge": pl.Float64,
+                "annual_demand_charge": pl.Float64,
+                "annual_min_charge": pl.Float64,
+                "peak_demand_kw": pl.Float64,
                 "error": pl.Utf8,
             }
             return pl.DataFrame(schema=schema)
