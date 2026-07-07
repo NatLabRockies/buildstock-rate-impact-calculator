@@ -80,10 +80,11 @@ class TestGeoUriConstruction:
         assert mgr.uses_geo_metadata() is True
         uris = mgr.metadata_uris_for_upgrade(0)
         assert len(uris) == 2
+        # County metadata comes from the non-aggregate full tree (per-row weights)
         assert any(
             u.endswith(
-                "by_state_and_county/full/parquet/state=AK/county=G0200130/"
-                "AK_G0200130_upgrade0_agg.parquet"
+                "metadata_and_annual_results/by_state_and_county/full/parquet/"
+                "state=AK/county=G0200130/AK_G0200130_upgrade0.parquet"
             )
             for u in uris
         )
@@ -94,9 +95,10 @@ class TestGeoUriConstruction:
         mgr.set_geo_selection(puma_ids=["G02000101"])
         uris = mgr.metadata_uris_for_upgrade(3)
         assert len(uris) == 1
+        # PUMA metadata only exists in the aggregates tree
         assert uris[0].endswith(
-            "by_state_and_puma/full/parquet/state=AK/puma=G02000101/"
-            "AK_G02000101_upgrade3_agg.parquet"
+            "metadata_and_annual_results_aggregates/by_state_and_puma/full/"
+            "parquet/state=AK/puma=G02000101/AK_G02000101_upgrade3_agg.parquet"
         )
 
     def test_comstock_mixed_county_and_puma(self, tmp_path: Path) -> None:
@@ -112,8 +114,8 @@ class TestGeoUriConstruction:
         mgr.set_geo_selection(county_ids=["G0200130"])
         baseline = mgr.metadata_uris_for_upgrade(0)
         upgrade = mgr.metadata_uris_for_upgrade(3)
-        assert baseline[0].endswith("AK_G0200130_baseline_agg.parquet")
-        assert upgrade[0].endswith("AK_G0200130_upgrade03_agg.parquet")
+        assert baseline[0].endswith("AK_G0200130_baseline.parquet")
+        assert upgrade[0].endswith("AK_G0200130_upgrade03.parquet")
 
     def test_unparseable_geo_id_skipped(self, tmp_path: Path) -> None:
         mgr = _make_mgr(tmp_path)

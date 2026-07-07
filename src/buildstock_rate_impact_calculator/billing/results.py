@@ -2,6 +2,9 @@
 Results summarization and export utilities for BuildStock TOU bill calculations.
 
 Functions:
+  bill_source_options  — {display label: bill column} for the energy sources
+                          present on a results frame
+  with_selected_bill   — adds a per-row sum of the selected bill columns
   add_cost_per_sqft    — adds the per-row $/ft² column (ComStock-style frames)
   summarize_bills      — dataset-aware aggregation by upgrade and optional group
   compute_bill_savings — per-building (baseline − upgrade) savings; ComStock
@@ -11,7 +14,7 @@ Functions:
 
 from __future__ import annotations
 import polars as pl
-from typing import Optional
+from typing import Optional, Sequence
 
 # Columns that represent per-building bill amounts (used for aggregation).
 _BILL_COLUMNS = (
@@ -21,6 +24,16 @@ _BILL_COLUMNS = (
     "fuel_oil_bill",
     "total_energy_bill",
 )
+
+# Energy-source bill columns selectable in the results UI, in display order.
+# ``annual_bill`` is the PySAM electricity bill; the fuel columns come from
+# ``_calculate_fuel_bills`` in page_05_run.
+BILL_SOURCE_LABELS: dict[str, str] = {
+    "annual_bill": "Electricity",
+    "natural_gas_bill": "Natural Gas",
+    "propane_bill": "Propane",
+    "fuel_oil_bill": "Fuel Oil",
+}
 
 # Non-grouping, non-bill metadata columns excluded from the group-by selector
 _META_COLUMNS = frozenset(
@@ -51,51 +64,93 @@ _META_COLUMNS = frozenset(
 )
 
 
-def add_cost_per_sqft(results_df: pl.DataFrame) -> pl.DataFrame:
-    """Add a per-row ``cost_per_sqft`` column.
+def bill_source_options(results_df: pl.DataFrame) -> dict[str, str]:
+    """Return ``{display label: bill column}`` for the energy sources present
+    on ``results_df``, in canonical display order (Electricity first)."""
+    return {
+        label: col
+        for col, label in BILL_SOURCE_LABELS.items()
+        if col in results_df.columns
+    }
 
-    ``cost_per_sqft = annual_bill / (weight × sqft)`` — ComStock
-    ``annual_bill`` already bakes in the row weight, so dividing by
-    ``weight × sqft`` strips it back to $/ft² of a single building.
-    Rows missing any of ``annual_bill``, ``weight``, ``sqft``, or with a
-    non-positive denominator yield ``None`` rather than ``inf``/``NaN``.
 
-    If ``weight`` or ``sqft`` are absent from the schema (ResStock results or
-    any older frame), the column is still added but is uniformly null —
-    callers can rely on its presence after this call.
+def with_selected_bill(
+    results_df: pl.DataFrame,
+    bill_columns: Sequence[str],
+    alias: str = "selected_bill",
+) -> pl.DataFrame:
+    """Add a per-row sum of the selected bill columns as ``alias``.
+
+    Fuel-bill columns may be null for buildings without that fuel; nulls are
+    treated as $0 in the sum. Columns absent from the frame are skipped.
+
+    Raises:
+        ValueError: If none of ``bill_columns`` exist on the frame.
     """
-    cols = set(results_df.columns)
-    if not {"annual_bill", "weight", "sqft"}.issubset(cols):
-        return results_df.with_columns(
-            pl.lit(None, dtype=pl.Float64).alias("cost_per_sqft")
+    present = [c for c in bill_columns if c in results_df.columns]
+    if not present:
+        raise ValueError(
+            f"None of the selected bill columns {list(bill_columns)} are present "
+            f"in the results DataFrame."
         )
+    expr = pl.col(present[0]).cast(pl.Float64).fill_null(0.0)
+    for col in present[1:]:
+        expr = expr + pl.col(col).cast(pl.Float64).fill_null(0.0)
+    return results_df.with_columns(expr.alias(alias))
 
+
+def _per_sqft_expr(bill_col: str) -> pl.Expr:
+    """Per-row ``bill / (weight × sqft)`` expression, null-safe (no inf/NaN)."""
     denom = pl.col("weight") * pl.col("sqft")
-    return results_df.with_columns(
+    return (
         pl.when(
-            pl.col("annual_bill").is_not_null()
+            pl.col(bill_col).is_not_null()
             & pl.col("weight").is_not_null()
             & pl.col("sqft").is_not_null()
             & (denom > 0)
         )
-        .then(pl.col("annual_bill") / denom)
+        .then(pl.col(bill_col) / denom)
         .otherwise(None)
-        .alias("cost_per_sqft")
     )
 
 
-def _summarize_bills_resstock(df: pl.DataFrame, group_keys: list[str]) -> pl.DataFrame:
+def add_cost_per_sqft(
+    results_df: pl.DataFrame,
+    bill_col: str = "annual_bill",
+    out_col: str = "cost_per_sqft",
+) -> pl.DataFrame:
+    """Add a per-row ``cost_per_sqft`` column.
+
+    ``cost_per_sqft = bill / (weight × sqft)`` — ComStock bills already bake
+    in the row weight, so dividing by ``weight × sqft`` strips it back to
+    $/ft² of a single building. Rows missing any of ``bill_col``, ``weight``,
+    ``sqft``, or with a non-positive denominator yield ``None`` rather than
+    ``inf``/``NaN``.
+
+    If ``bill_col``, ``weight``, or ``sqft`` are absent from the schema
+    (ResStock results or any older frame), the column is still added but is
+    uniformly null — callers can rely on its presence after this call.
+    """
+    cols = set(results_df.columns)
+    if not {bill_col, "weight", "sqft"}.issubset(cols):
+        return results_df.with_columns(pl.lit(None, dtype=pl.Float64).alias(out_col))
+    return results_df.with_columns(_per_sqft_expr(bill_col).alias(out_col))
+
+
+def _summarize_bills_resstock(
+    df: pl.DataFrame, group_keys: list[str], bill_expr: pl.Expr
+) -> pl.DataFrame:
     """ResStock branch of :func:`summarize_bills`.
 
-    ``annual_bill`` is the per-building (single dwelling) dollar amount;
-    ``weight`` is the scalar dataset weight repeated on every row.
-    Means/medians/distributions are per-building (unweighted); totals are
-    ``sum(weight × bill)``; ``units = sum(weight)`` (dwelling units).
+    ``bill_expr`` is the per-building (single dwelling) dollar amount for the
+    selected energy sources; ``weight`` is the scalar dataset weight repeated
+    on every row. Means/medians/distributions are per-building (unweighted);
+    totals are ``sum(weight × bill)``; ``units = sum(weight)`` (dwelling units).
     """
     agg_exprs = [
-        pl.col("annual_bill").mean().alias("mean_annual_bill"),
-        pl.col("annual_bill").median().alias("median_annual_bill"),
-        (pl.col("annual_bill") * pl.col("weight")).sum().alias("total_annual_bill"),
+        bill_expr.mean().alias("mean_annual_bill"),
+        bill_expr.median().alias("median_annual_bill"),
+        (bill_expr * pl.col("weight")).sum().alias("total_annual_bill"),
         pl.col("weight").sum().alias("units"),
         pl.col("bldg_id").count().alias("count"),
     ]
@@ -103,6 +158,13 @@ def _summarize_bills_resstock(df: pl.DataFrame, group_keys: list[str]) -> pl.Dat
         agg_exprs.append(
             pl.col("annual_energy_kwh").mean().alias("mean_annual_energy_kwh")
         )
+    # Per-source means/totals for the "By fuel" view. Electricity gets a
+    # distinct alias because ``mean_annual_bill`` above reflects the selected
+    # sources, not necessarily electricity alone.
+    agg_exprs.append(pl.col("annual_bill").mean().alias("mean_electricity_bill"))
+    agg_exprs.append(
+        (pl.col("annual_bill") * pl.col("weight")).sum().alias("total_electricity_bill")
+    )
     for fuel_col in (
         "natural_gas_bill",
         "propane_bill",
@@ -117,21 +179,27 @@ def _summarize_bills_resstock(df: pl.DataFrame, group_keys: list[str]) -> pl.Dat
     return df.group_by(group_keys).agg(agg_exprs).sort(group_keys)
 
 
-def _summarize_bills_comstock(df: pl.DataFrame, group_keys: list[str]) -> pl.DataFrame:
+def _summarize_bills_comstock(
+    df: pl.DataFrame, group_keys: list[str], bill_expr: pl.Expr
+) -> pl.DataFrame:
     """ComStock branch of :func:`summarize_bills`.
 
-    ``annual_bill`` is already weighted real-world dollars (``load × weight``
-    was applied before PySAM ran). The per-building
-    ``cost_per_sqft = annual_bill / (weight × sqft)`` is computed first and
-    is what means/medians/distributions are reported over. Totals are direct
-    sums (``annual_bill`` already weighted; ``total_sqft = sum(weight × sqft)``).
+    Bills are already weighted real-world dollars (``load × weight`` was
+    applied before PySAM ran; fuel bills were weighted in
+    ``_calculate_fuel_bills``). The per-building
+    ``cost_per_sqft = bill / (weight × sqft)`` of the selected sources is
+    computed first and is what means/medians/distributions are reported over.
+    Totals are direct sums (bills already weighted;
+    ``total_sqft = sum(weight × sqft)``). Per-source $/ft² means
+    (``mean_{col}_per_sqft``) are emitted for the "By fuel" stacked-bar view.
     """
-    df = add_cost_per_sqft(df)
+    df = df.with_columns(bill_expr.alias("_sel_bill"))
+    df = add_cost_per_sqft(df, bill_col="_sel_bill")
 
     agg_exprs = [
         pl.col("cost_per_sqft").mean().alias("mean_per_sqft"),
         pl.col("cost_per_sqft").median().alias("median_per_sqft"),
-        pl.col("annual_bill").sum().alias("total_annual_bill"),
+        pl.col("_sel_bill").sum().alias("total_annual_bill"),
         (pl.col("weight") * pl.col("sqft")).sum().alias("total_sqft"),
         pl.col("weight").sum().alias("units"),
         pl.col("bldg_id").count().alias("count"),
@@ -140,18 +208,17 @@ def _summarize_bills_comstock(df: pl.DataFrame, group_keys: list[str]) -> pl.Dat
         agg_exprs.append(
             pl.col("annual_energy_kwh").mean().alias("mean_annual_energy_kwh")
         )
-    for fuel_col in (
-        "natural_gas_bill",
-        "propane_bill",
-        "fuel_oil_bill",
-        "total_energy_bill",
-    ):
-        if fuel_col in df.columns:
-            # ComStock fuel bills are already weighted (see _calculate_fuel_bills
-            # in page_05_run). Means are reported on weighted dollars, totals
-            # are direct sums.
-            agg_exprs.append(pl.col(fuel_col).mean().alias(f"mean_{fuel_col}"))
-            agg_exprs.append(pl.col(fuel_col).sum().alias(f"total_{fuel_col}"))
+    for bill_col in _BILL_COLUMNS:
+        if bill_col in df.columns:
+            # Weighted-dollar means are not meaningful per building, so
+            # per-source stats are reported as $/ft²; totals are direct sums.
+            # Electricity (annual_bill) gets a distinct alias so it can't
+            # collide with the selected-sources headline columns.
+            src = "electricity_bill" if bill_col == "annual_bill" else bill_col
+            agg_exprs.append(
+                _per_sqft_expr(bill_col).mean().alias(f"mean_{src}_per_sqft")
+            )
+            agg_exprs.append(pl.col(bill_col).sum().alias(f"total_{src}"))
     return df.group_by(group_keys).agg(agg_exprs).sort(group_keys)
 
 
@@ -159,6 +226,7 @@ def summarize_bills(
     results_df: pl.DataFrame,
     dataset_type: str,
     group_by: Optional[str] = None,
+    bill_columns: Optional[Sequence[str]] = None,
 ) -> pl.DataFrame:
     """Aggregate bill statistics by upgrade scenario, dispatched on dataset.
 
@@ -171,17 +239,24 @@ def summarize_bills(
             on per-building $/ft² (ComStock).
         group_by: Optional metadata column name to break the summary out by
             (e.g. ``"in.vintage"``, ``"in.state"``).
+        bill_columns: Energy-source bill columns whose per-row sum drives the
+            headline statistics (see :data:`BILL_SOURCE_LABELS`). Defaults to
+            ``["annual_bill"]`` (electricity only). Columns absent from the
+            frame are skipped; fuel nulls are treated as $0.
 
     Returns:
         Polars DataFrame keyed by ``(group_by?, upgrade)`` with columns
         appropriate to the dataset:
 
         * **ResStock**: ``mean_annual_bill``, ``median_annual_bill``,
-          ``total_annual_bill`` (weighted), ``units`` (= sum-of-weights),
-          plus fuel/total bill means and weighted totals when present.
+          ``total_annual_bill`` (weighted), ``units`` (= sum-of-weights) —
+          all over the selected sources — plus per-source means
+          (``mean_electricity_bill``, ``mean_<fuel>_bill``) and weighted
+          totals when present.
         * **ComStock**: ``mean_per_sqft``, ``median_per_sqft``,
-          ``total_annual_bill``, ``total_sqft``, ``units``, plus fuel-bill
-          means and totals when present.
+          ``total_annual_bill``, ``total_sqft``, ``units`` over the selected
+          sources, plus per-source ``mean_<col>_per_sqft`` and ``total_<col>``
+          when present.
 
     Raises:
         ValueError: If a required column or the ``group_by`` column is missing.
@@ -193,7 +268,19 @@ def summarize_bills(
     if "weight" not in results_df.columns:
         raise ValueError("results_df must contain a 'weight' column.")
 
+    # Error rows (failed PySAM calc) carry a null electricity bill; drop them
+    # from statistics regardless of which sources are selected.
     df = results_df.filter(pl.col("annual_bill").is_not_null())
+
+    selected = [c for c in (bill_columns or ["annual_bill"]) if c in results_df.columns]
+    if not selected:
+        raise ValueError(
+            f"None of the selected bill columns {list(bill_columns or [])} are "
+            f"present in the results DataFrame."
+        )
+    bill_expr = pl.col(selected[0]).cast(pl.Float64).fill_null(0.0)
+    for col in selected[1:]:
+        bill_expr = bill_expr + pl.col(col).cast(pl.Float64).fill_null(0.0)
 
     group_keys = ["upgrade"]
     if group_by is not None:
@@ -203,17 +290,18 @@ def summarize_bills(
 
     ds = (dataset_type or "").lower()
     if ds == "comstock":
-        return _summarize_bills_comstock(df, group_keys)
-    return _summarize_bills_resstock(df, group_keys)
+        return _summarize_bills_comstock(df, group_keys, bill_expr)
+    return _summarize_bills_resstock(df, group_keys, bill_expr)
 
 
 def compute_bill_savings(
     results_df: pl.DataFrame,
     baseline_upgrade: int = 0,
+    bill_col: str = "annual_bill",
 ) -> pl.DataFrame:
     """Compute per-building bill savings vs the baseline upgrade.
 
-    ``bill_savings = baseline_bill - annual_bill`` — positive means the
+    ``bill_savings = baseline_bill - bill`` — positive means the
     upgrade is cheaper than the baseline (savings). This is the opposite
     sign convention from the legacy ``compute_bill_diff``.
 
@@ -223,11 +311,14 @@ def compute_bill_savings(
     is emitted.
 
     Args:
-        results_df: Must contain ``bldg_id``, ``upgrade``, ``annual_bill``.
+        results_df: Must contain ``bldg_id``, ``upgrade``, and ``bill_col``.
             For per-sqft savings, must also contain ``cost_per_sqft``. When
             a ``_row_uid`` column is present the baseline join also includes
             it so ComStock per-row geographic aggregates line up.
         baseline_upgrade: The upgrade ID to treat as baseline (default 0).
+        bill_col: The per-row bill column to difference (default
+            ``annual_bill``; pass ``selected_bill`` after
+            :func:`with_selected_bill` to cover multiple energy sources).
 
     Returns:
         Non-baseline rows joined with ``baseline_bill`` and ``bill_savings``
@@ -250,7 +341,7 @@ def compute_bill_savings(
     if "_row_uid" in results_df.columns:
         join_keys.append("_row_uid")
 
-    baseline_sel: list = [pl.col("annual_bill").alias("baseline_bill")]
+    baseline_sel: list = [pl.col(bill_col).alias("baseline_bill")]
     if has_per_sqft:
         baseline_sel.append(pl.col("cost_per_sqft").alias("baseline_cost_per_sqft"))
     baseline = results_df.filter(pl.col("upgrade") == baseline_upgrade).select(
@@ -260,7 +351,7 @@ def compute_bill_savings(
     non_baseline = results_df.filter(pl.col("upgrade") != baseline_upgrade)
     joined = non_baseline.join(baseline, on=join_keys, how="left")
 
-    new_cols = [(pl.col("baseline_bill") - pl.col("annual_bill")).alias("bill_savings")]
+    new_cols = [(pl.col("baseline_bill") - pl.col(bill_col)).alias("bill_savings")]
     if has_per_sqft:
         new_cols.append(
             (pl.col("baseline_cost_per_sqft") - pl.col("cost_per_sqft")).alias(

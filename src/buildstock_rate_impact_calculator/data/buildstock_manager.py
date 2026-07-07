@@ -91,6 +91,10 @@ class DatasetConfig:
     geo_filename: str = (
         "state={state}/{level}={geo_id}/{state}_{geo_id}_{token}.parquet"
     )
+    # Per-level overrides of geo_filename. Needed because ComStock county
+    # metadata comes from the non-aggregate tree (no "_agg" suffix) while PUMA
+    # metadata only exists in the aggregates tree ("_agg" suffix).
+    geo_filenames: Optional[Dict[str, str]] = None
     geo_baseline_token: str = ""  # e.g. "upgrade0" or "baseline"
     geo_upgrade_token: str = (
         ""  # e.g. "upgrade{upgrade_id}" or "upgrade{upgrade_id:02d}"
@@ -255,11 +259,12 @@ class BuildStockDataManager:
             state_column="in.state",
             expected_resolution_minutes=15,
             supported_upgrades=list(range(40)),  # 0-39 for ComStock
-            # Full (not basic) aggregates: basic files lack the fuel energy columns.
-            # Column projection via scan_parquet keeps downloads small regardless.
-            metadata_path="metadata_and_annual_results/by_state_and_county/full/parquet",
-            baseline_filename="baseline.parquet",
-            upgrade_filename="upgrade{upgrade_id:02d}.parquet",
+            # National (no county/PUMA selection) falls back to the full
+            # aggregates file — the non-aggregate tree only exists
+            # by_state_and_county. Column projection keeps downloads small.
+            metadata_path="metadata_and_annual_results_aggregates/national/full/parquet",
+            baseline_filename="baseline_agg.parquet",
+            upgrade_filename="upgrade{upgrade_id:02d}_agg.parquet",
             natural_gas_energy_column="out.natural_gas.total.energy_consumption..kwh",
             natural_gas_bill_column="out.utility_bills.natural_gas_bill..usd",
             propane_energy_column="out.propane.total.energy_consumption..kwh",
@@ -276,8 +281,13 @@ class BuildStockDataManager:
                 "in.hvac_system_type",
             ],
             geo_metadata_paths={
+                # County: non-aggregate full metadata (per-row weights, bldg_id
+                # may repeat). PUMA: aggregates only — no non-aggregate tree.
                 "county": "metadata_and_annual_results/by_state_and_county/full/parquet",
-                "puma": "metadata_and_annual_results/by_state_and_puma/full/parquet",
+                "puma": "metadata_and_annual_results_aggregates/by_state_and_puma/full/parquet",
+            },
+            geo_filenames={
+                "puma": "state={state}/{level}={geo_id}/{state}_{geo_id}_{token}_agg.parquet",
             },
             geo_baseline_token="baseline",
             geo_upgrade_token="upgrade{upgrade_id:02d}",
@@ -295,11 +305,12 @@ class BuildStockDataManager:
             state_column="in.state",
             expected_resolution_minutes=15,
             supported_upgrades=list(range(40)),  # 0-39 for ComStock
-            # Full (not basic) aggregates: basic files lack the fuel energy columns.
-            # Column projection via scan_parquet keeps downloads small regardless.
-            metadata_path="metadata_and_annual_results/by_state_and_county/full/parquet",
-            baseline_filename="upgrade0.parquet",
-            upgrade_filename="upgrade{upgrade_id}.parquet",
+            # National (no county/PUMA selection) falls back to the full
+            # aggregates file — the non-aggregate tree only exists
+            # by_state_and_county. Column projection keeps downloads small.
+            metadata_path="metadata_and_annual_results_aggregates/national/full/parquet",
+            baseline_filename="upgrade0_agg.parquet",
+            upgrade_filename="upgrade{upgrade_id}_agg.parquet",
             natural_gas_energy_column="out.natural_gas.total.energy_consumption..kwh",
             natural_gas_bill_column="calc.weighted.utility_bills.natural_gas_bill_state_average..billion_usd",
             propane_energy_column="out.propane.total.energy_consumption..kwh",
@@ -316,8 +327,13 @@ class BuildStockDataManager:
                 "in.hvac_system_type",
             ],
             geo_metadata_paths={
+                # County: non-aggregate full metadata (per-row weights, bldg_id
+                # may repeat). PUMA: aggregates only — no non-aggregate tree.
                 "county": "metadata_and_annual_results/by_state_and_county/full/parquet",
-                "puma": "metadata_and_annual_results/by_state_and_puma/full/parquet",
+                "puma": "metadata_and_annual_results_aggregates/by_state_and_puma/full/parquet",
+            },
+            geo_filenames={
+                "puma": "state={state}/{level}={geo_id}/{state}_{geo_id}_{token}_agg.parquet",
             },
             geo_baseline_token="upgrade0",
             geo_upgrade_token="upgrade{upgrade_id}",
@@ -542,7 +558,10 @@ class BuildStockDataManager:
                         f"Cannot determine state for {level} id '{geo_id}'; skipping."
                     )
                     continue
-                rel = self.config.geo_filename.format(
+                template = (self.config.geo_filenames or {}).get(
+                    level, self.config.geo_filename
+                )
+                rel = template.format(
                     state=state, level=level, geo_id=geo_id, token=token
                 )
                 uris.append(self._to_s3_uri(f"{self.config.base_uri}/{path}/{rel}"))
@@ -1667,15 +1686,10 @@ class BuildStockDataManager:
         results: Dict[str, pl.DataFrame] = {}
         for building_id in building_ids:
             for upgrade in upgrades:
-                path = (
-                    output_dir
-                    / f"{building_id}_{upgrade}_monthly_fuel.parquet"
-                )
+                path = output_dir / f"{building_id}_{upgrade}_monthly_fuel.parquet"
                 if path.exists():
                     try:
-                        results[f"{building_id}_{upgrade}"] = pl.read_parquet(
-                            path
-                        )
+                        results[f"{building_id}_{upgrade}"] = pl.read_parquet(path)
                     except Exception as exc:
                         self.logger.warning(
                             f"Could not read cached monthly-fuel file {path}: {exc}"

@@ -25,8 +25,10 @@ import pytest
 
 from buildstock_rate_impact_calculator.billing.results import (
     add_cost_per_sqft,
+    bill_source_options,
     compute_bill_savings,
     summarize_bills,
+    with_selected_bill,
 )
 
 
@@ -288,3 +290,102 @@ class TestComputeBillSavings:
         if "bill_savings_per_sqft" in out.columns:
             vals = out["bill_savings_per_sqft"].to_list()
             assert all(v is None or math.isnan(v) for v in vals)
+
+    def test_custom_bill_col(self) -> None:
+        """Savings can be computed on the selected-sources bill column."""
+        df = with_selected_bill(
+            _resstock_df().with_columns(
+                pl.Series("natural_gas_bill", [100.0, 200.0, 50.0, 100.0])
+            ),
+            ["annual_bill", "natural_gas_bill"],
+        )
+        out = compute_bill_savings(
+            df, baseline_upgrade=0, bill_col="selected_bill"
+        ).sort("bldg_id")
+        # bldg 1: (1000+100) - (800+50) = 250; bldg 2: (2000+200) - (1500+100) = 600
+        assert out["bill_savings"].to_list() == [
+            pytest.approx(250.0),
+            pytest.approx(600.0),
+        ]
+
+
+# ---------------------------------------------------------------------------
+# energy-source selection helpers
+# ---------------------------------------------------------------------------
+
+
+class TestBillSourceSelection:
+    def test_bill_source_options_orders_and_filters(self) -> None:
+        df = _resstock_df().with_columns(
+            pl.Series("natural_gas_bill", [100.0, 200.0, 50.0, 100.0])
+        )
+        options = bill_source_options(df)
+        assert options == {
+            "Electricity": "annual_bill",
+            "Natural Gas": "natural_gas_bill",
+        }
+
+    def test_with_selected_bill_sums_and_fills_nulls(self) -> None:
+        df = _resstock_df().with_columns(
+            pl.Series("natural_gas_bill", [100.0, None, 50.0, None])
+        )
+        out = with_selected_bill(df, ["annual_bill", "natural_gas_bill"]).sort(
+            ["upgrade", "bldg_id"]
+        )
+        assert out["selected_bill"].to_list() == [
+            pytest.approx(1100.0),
+            pytest.approx(2000.0),  # null gas treated as $0
+            pytest.approx(850.0),
+            pytest.approx(1500.0),
+        ]
+
+    def test_with_selected_bill_raises_when_no_columns_present(self) -> None:
+        df = _resstock_df()
+        with pytest.raises(ValueError, match="present"):
+            with_selected_bill(df, ["does_not_exist"])
+
+    def test_summarize_resstock_multi_source(self) -> None:
+        df = _resstock_df().with_columns(
+            pl.Series("natural_gas_bill", [100.0, 200.0, 50.0, 100.0])
+        )
+        summary = summarize_bills(
+            df,
+            dataset_type="resstock",
+            bill_columns=["annual_bill", "natural_gas_bill"],
+        ).sort("upgrade")
+        # Baseline mean: ((1000+100) + (2000+200)) / 2 = 1650
+        assert summary["mean_annual_bill"].to_list()[0] == pytest.approx(1650.0)
+        # Weighted total: 100 × (1100 + 2200) = 330_000
+        assert summary["total_annual_bill"].to_list()[0] == pytest.approx(330_000.0)
+        # Per-source electricity mean is preserved separately.
+        assert summary["mean_electricity_bill"].to_list()[0] == pytest.approx(1500.0)
+        assert summary["mean_natural_gas_bill"].to_list()[0] == pytest.approx(150.0)
+
+    def test_summarize_comstock_multi_source_per_sqft(self) -> None:
+        df = _comstock_df().with_columns(
+            # Already-weighted fuel bills: $1/ft² on each building.
+            pl.Series("natural_gas_bill", [10_000.0, 40_000.0, 10_000.0, 40_000.0])
+        )
+        summary = summarize_bills(
+            df,
+            dataset_type="comstock",
+            bill_columns=["annual_bill", "natural_gas_bill"],
+        ).sort("upgrade")
+        # Baseline electricity $/ft²: 5.0 and 4.0; gas adds 1.0 to each →
+        # combined mean = (6.0 + 5.0) / 2 = 5.5
+        assert summary["mean_per_sqft"].to_list()[0] == pytest.approx(5.5)
+        # Totals: 210_000 + 50_000 = 260_000
+        assert summary["total_annual_bill"].to_list()[0] == pytest.approx(260_000.0)
+        # Per-source $/ft² means for the "By fuel" stacked bar.
+        assert summary["mean_electricity_bill_per_sqft"].to_list()[0] == pytest.approx(
+            4.5
+        )
+        assert summary["mean_natural_gas_bill_per_sqft"].to_list()[0] == pytest.approx(
+            1.0
+        )
+        assert summary["total_natural_gas_bill"].to_list()[0] == pytest.approx(50_000.0)
+
+    def test_summarize_bills_unknown_sources_raise(self) -> None:
+        df = _resstock_df()
+        with pytest.raises(ValueError, match="present"):
+            summarize_bills(df, dataset_type="resstock", bill_columns=["propane_bill"])

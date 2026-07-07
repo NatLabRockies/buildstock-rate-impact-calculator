@@ -2,9 +2,10 @@
 Page 6: Results Visualization & Export
 
 Displays:
-  - Summary table: mean/median/total bill per scenario (with optional grouping)
+  - Energy source pills: which bill sources feed the statistics
+  - Summary table: mean/median/total bill per scenario
   - Bill Summary view toggle: total-bill table vs by-fuel stacked bar
-  - Grouped bar chart: mean annual bill by scenario and group
+  - Bar chart: mean annual bill ($ for ResStock, $/ft² for ComStock)
   - Box-plot distribution: bill spread per scenario
   - Bill Savings vs baseline (Average / Total toggle)
   - Download CSV button (st.download_button)
@@ -71,24 +72,13 @@ def render_results_page(app_state: AppState) -> None:
     if st.session_state.pop("_navigate_to_results", False):
         st.info("📂 Results loaded from project — displaying below.")
 
-    # ── Group-by selector ─────────────────────────────────────────────────────
-    st.subheader("Grouping")
-    from buildstock_rate_impact_calculator.billing.results import _META_COLUMNS
-
-    available_groups = [c for c in df.columns if c not in _META_COLUMNS]
-    group_options = ["None"] + available_groups
-    chosen_group = st.selectbox(
-        "Group results by",
-        options=group_options,
-        index=0,
-        help="Choose a column to break down results (e.g. building_type, state).",
-    )
-    group_col = None if chosen_group == "None" else chosen_group
-
     from buildstock_rate_impact_calculator.billing.results import (
-        summarize_bills,
+        add_cost_per_sqft,
+        bill_source_options,
         compute_bill_savings,
         format_for_export,
+        summarize_bills,
+        with_selected_bill,
     )
     from buildstock_rate_impact_calculator.ui.components.charts import (
         render_bill_comparison_bar,
@@ -99,7 +89,7 @@ def render_results_page(app_state: AppState) -> None:
 
     # Dataset type drives which aggregation columns the summary frame
     # carries (ResStock: mean/median/total_annual_bill + units; ComStock:
-    # mean/median_per_sqft + total_annual_bill + total_sqft + units).
+    # mean/median_per_sqft + total_annual_bill + total_sqft).
     ds_type = (app_state.dataset_type or "").lower()
     is_comstock = ds_type == "comstock"
 
@@ -107,7 +97,32 @@ def render_results_page(app_state: AppState) -> None:
     dollar_fmt = "$.0f"
     per_sqft_fmt = "$.2f"
 
-    st.divider()
+    # ── Energy source selection ───────────────────────────────────────────────
+    # The selected sources drive every statistic on the page: summary
+    # mean/median/totals, the distribution, and bill savings.
+    sources = bill_source_options(df)  # {display label: bill column}
+    source_labels = list(sources)
+    if len(source_labels) > 1:
+        st.subheader("Energy Sources")
+        chosen = st.pills(
+            "Energy sources included in the bill statistics below",
+            options=source_labels,
+            selection_mode="multi",
+            default=source_labels,
+            key="bill_sources",
+        )
+        selected_labels = list(chosen) if chosen else source_labels
+        if not chosen:
+            st.caption("No sources selected — showing the total across all sources.")
+        st.divider()
+    else:
+        selected_labels = source_labels
+    bill_cols = [sources[label] for label in selected_labels]
+
+    # Per-row bill for the selected sources (+ $/ft² for ComStock).
+    df_sel = with_selected_bill(df, bill_cols)
+    if is_comstock:
+        df_sel = add_cost_per_sqft(df_sel, bill_col="selected_bill")
 
     # ── Summary table ─────────────────────────────────────────────────────────
     st.subheader("Bill Summary")
@@ -119,7 +134,7 @@ def render_results_page(app_state: AppState) -> None:
     )
     summary = None
     try:
-        summary = summarize_bills(df, dataset_type=ds_type, group_by=group_col)
+        summary = summarize_bills(df, dataset_type=ds_type, bill_columns=bill_cols)
         # Add scenario labels
         summary = summary.with_columns(
             pl.col("upgrade")
@@ -131,43 +146,37 @@ def render_results_page(app_state: AppState) -> None:
         )
 
         if bill_summary_view == "Total bill":
-            display_cols = ["scenario", "upgrade"]
-            if group_col:
-                display_cols = [group_col] + display_cols
+            st.caption(f"Sources included: {', '.join(selected_labels)}")
             if is_comstock:
-                display_cols += [
+                # Weighted floor area is reported instead of building counts.
+                display_cols = [
+                    "scenario",
+                    "upgrade",
                     "mean_per_sqft",
                     "median_per_sqft",
                     "total_annual_bill",
                     "total_sqft",
-                    "units",
                 ]
             else:
-                display_cols += [
+                display_cols = [
+                    "scenario",
+                    "upgrade",
                     "mean_annual_bill",
                     "median_annual_bill",
                     "total_annual_bill",
                     "units",
                 ]
-            # Include fuel/total bill summaries if present
-            for extra in (
-                "mean_natural_gas_bill",
-                "mean_propane_bill",
-                "mean_fuel_oil_bill",
-                "mean_total_energy_bill",
-                "total_total_energy_bill",
-            ):
-                if extra in summary.columns:
-                    display_cols.append(extra)
             display_cols = [c for c in display_cols if c in summary.columns]
 
             # Per-column number format: $/ft² gets 2 decimals; everything else
             # in whole-building dollars gets no decimals.
             per_sqft_cols = {"mean_per_sqft", "median_per_sqft"}
             non_dollar_cols = {"scenario", "upgrade", "units", "total_sqft"}
-            if group_col:
-                non_dollar_cols.add(group_col)
-            column_config: dict[str, st.column_config.Column] = {}
+            column_config: dict[str, st.column_config.Column] = {
+                "total_sqft": st.column_config.NumberColumn(
+                    "total_sqft (ft²)", format="%d"
+                ),
+            }
             for col in display_cols:
                 if col in per_sqft_cols:
                     column_config[col] = st.column_config.NumberColumn(
@@ -186,13 +195,15 @@ def render_results_page(app_state: AppState) -> None:
                 column_config=column_config,
             )
         else:
-            # "By fuel": stacked bar of mean per-fuel bills by scenario.
-            fuel_label_map = {
-                "mean_annual_bill": "Electricity",
-                "mean_natural_gas_bill": "Natural Gas",
-                "mean_propane_bill": "Propane",
-                "mean_fuel_oil_bill": "Fuel Oil",
-            }
+            # "By fuel": stacked bar of per-source mean bills by scenario
+            # ($/ft² for ComStock, whole-building $ for ResStock).
+            fuel_label_map: dict[str, str] = {}
+            for label in selected_labels:
+                col = sources[label]
+                src = "electricity_bill" if col == "annual_bill" else col
+                summary_col = f"mean_{src}_per_sqft" if is_comstock else f"mean_{src}"
+                fuel_label_map[summary_col] = label
+            stack_fmt = per_sqft_fmt if is_comstock else dollar_fmt
             long_summary = melt_fuels_to_long(summary, fuel_label_map)
             if long_summary.height == 0:
                 st.info(
@@ -203,48 +214,53 @@ def render_results_page(app_state: AppState) -> None:
                 stack_chart = render_bill_stack_bar(
                     long_summary,
                     value_col="value",
-                    group_col=group_col,
                     scenario_col="scenario",
                     fuel_col="fuel_type",
-                    value_format=dollar_fmt,
+                    value_format=stack_fmt,
+                    y_axis_title=(
+                        "Mean Bill ($/ft²)" if is_comstock else "Mean Bill ($)"
+                    ),
                     chart_title="Mean Annual Bill by Fuel",
                 )
                 st.altair_chart(stack_chart, width="stretch")
     except Exception as exc:
         st.error(f"Failed to summarize bills: {exc}")
 
-    # ── Fuel cost breakdown ───────────────────────────────────────────────────
-    fuel_bill_cols = [
-        c
-        for c in df.columns
-        if c
-        in ("natural_gas_bill", "propane_bill", "fuel_oil_bill", "total_energy_bill")
-    ]
-    if fuel_bill_cols:
+    # ── Energy cost breakdown ─────────────────────────────────────────────────
+    # Per-scenario mean bill for every available source (not just the selected
+    # ones): $/ft² for ComStock, whole-building $ for ResStock.
+    if summary is not None and len(source_labels) > 1:
         st.divider()
         st.subheader("Energy Cost Breakdown")
-        fuel_labels = {
-            "annual_bill": "Electricity",
-            "natural_gas_bill": "Natural Gas",
-            "propane_bill": "Propane",
-            "fuel_oil_bill": "Fuel Oil",
-            "total_energy_bill": "Total Energy",
-        }
-        breakdown_cols = ["annual_bill"] + fuel_bill_cols
-        breakdown_present = [c for c in breakdown_cols if c in df.columns]
         try:
-            # Per-scenario mean breakdown table
-            grp_keys = (
-                ["upgrade", "scenario"] if "scenario" in df.columns else ["upgrade"]
+            breakdown_map: dict[str, str] = {}
+            for label, col in sources.items():
+                src = "electricity_bill" if col == "annual_bill" else col
+                summary_col = f"mean_{src}_per_sqft" if is_comstock else f"mean_{src}"
+                if summary_col in summary.columns:
+                    breakdown_map[summary_col] = label
+            total_col = (
+                "mean_total_energy_bill_per_sqft"
+                if is_comstock
+                else "mean_total_energy_bill"
             )
-            agg = (
-                df.group_by(grp_keys)
-                .agg(
-                    [pl.col(c).mean().alias(fuel_labels[c]) for c in breakdown_present]
-                )
-                .sort("upgrade")
+            if total_col in summary.columns:
+                breakdown_map[total_col] = "Total Energy"
+            breakdown_fmt = per_sqft_fmt if is_comstock else dollar_fmt
+            unit_note = "$/ft²" if is_comstock else "$ per building"
+            st.caption(f"Mean annual bill by energy source ({unit_note}).")
+            breakdown = summary.select(["scenario"] + list(breakdown_map)).rename(
+                breakdown_map
             )
-            st.dataframe(agg.to_pandas(), width="stretch", hide_index=True)
+            st.dataframe(
+                breakdown.to_pandas(),
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    label: st.column_config.NumberColumn(format=breakdown_fmt)
+                    for label in breakdown_map.values()
+                },
+            )
 
             # Rate names applied (if available)
             rate_name_cols = [c for c in df.columns if c.endswith("_rate_name")]
@@ -270,7 +286,6 @@ def render_results_page(app_state: AppState) -> None:
             chart_fmt = per_sqft_fmt if is_comstock else dollar_fmt
             chart = render_bill_comparison_bar(
                 summary,
-                group_col=group_col,
                 bill_col=bill_col,
                 value_format=chart_fmt,
             )
@@ -283,7 +298,19 @@ def render_results_page(app_state: AppState) -> None:
     # ── Distribution chart ────────────────────────────────────────────────────
     st.subheader("Bill Distribution")
     try:
-        dist_chart = render_bill_distribution(df, group_col=group_col)
+        if is_comstock:
+            dist_chart = render_bill_distribution(
+                df_sel,
+                bill_col="cost_per_sqft",
+                value_format=per_sqft_fmt,
+                y_axis_title="Annual Bill ($/ft²)",
+            )
+        else:
+            dist_chart = render_bill_distribution(
+                df_sel,
+                bill_col="selected_bill",
+                y_axis_title="Annual Bill ($)",
+            )
         st.altair_chart(dist_chart, width="stretch")
     except Exception as exc:
         st.error(f"Distribution chart error: {exc}")
@@ -301,7 +328,9 @@ def render_results_page(app_state: AppState) -> None:
             key="bill_savings_view",
         )
         try:
-            diff_df = compute_bill_savings(df, baseline_upgrade=0)
+            diff_df = compute_bill_savings(
+                df_sel, baseline_upgrade=0, bill_col="selected_bill"
+            )
             grp_keys = (
                 ["upgrade", "scenario"]
                 if "scenario" in diff_df.columns
@@ -311,7 +340,7 @@ def render_results_page(app_state: AppState) -> None:
             # Pick the right savings column based on dataset + view.
             #   ResStock: bill_savings (whole-building $)
             #   ComStock: bill_savings_per_sqft when displaying $/ft²; otherwise
-            #            bill_savings (whole-building $) for totals.
+            #            bill_savings (weighted $) for totals.
             use_per_sqft = (
                 is_comstock
                 and savings_view == "Average"
@@ -345,10 +374,9 @@ def render_results_page(app_state: AppState) -> None:
                 )
             else:
                 # Total view: weighted total annual savings (sum across
-                # buildings). ComStock annual_bill is already weighted, so a
-                # direct sum is the dataset total; ResStock requires the
-                # row weight (already baked into bill_savings? No — savings
-                # is baseline-upgrade in per-building dollars for ResStock).
+                # buildings). ComStock bills are already weighted, so a direct
+                # sum is the dataset total; ResStock savings are per-building
+                # dollars, so multiply by the scalar row weight.
                 if not is_comstock and "weight" in diff_df.columns:
                     total_expr = (
                         (pl.col(savings_col) * pl.col("weight"))
@@ -444,14 +472,31 @@ def render_results_page(app_state: AppState) -> None:
         )
         import altair as alt
 
-        baseline_bills = df.filter(pl.col("upgrade") == 0).select(
-            ["bldg_id", pl.col("annual_bill").alias("baseline_bill")]
+        # Join on _row_uid too when present: ComStock full metadata can carry
+        # the same bldg_id on multiple rows (one per geographic instance).
+        comp_join_keys = ["bldg_id"]
+        if "_row_uid" in df_sel.columns:
+            comp_join_keys.append("_row_uid")
+        baseline_sel = [pl.col("selected_bill").alias("baseline_bill")]
+        if is_comstock and "cost_per_sqft" in df_sel.columns:
+            baseline_sel.append(pl.col("cost_per_sqft").alias("baseline_cost_per_sqft"))
+        baseline_bills = df_sel.filter(pl.col("upgrade") == 0).select(
+            comp_join_keys + baseline_sel
         )
+
+        # ComStock savings are reported per weighted ft²; ResStock in $.
+        comp_per_sqft = is_comstock and "cost_per_sqft" in df_sel.columns
+        savings_value_col = (
+            "annual_savings_per_sqft" if comp_per_sqft else "annual_savings"
+        )
+        savings_unit = "$/ft²" if comp_per_sqft else "$"
+        comp_fmt = per_sqft_fmt if comp_per_sqft else dollar_fmt
+
         non_baseline_upgrades = [u for u in upgrades if u != 0]
         for _uid in non_baseline_upgrades:
             _label = _scenario_display(_base_uri, _uid)
             with st.expander(_label, expanded=(_uid == non_baseline_upgrades[0])):
-                _upg_df = df.filter(pl.col("upgrade") == _uid)
+                _upg_df = df_sel.filter(pl.col("upgrade") == _uid)
                 _show = st.radio(
                     "Show buildings:",
                     ["All filtered buildings", "Applicable buildings only"],
@@ -460,20 +505,27 @@ def render_results_page(app_state: AppState) -> None:
                 )
                 if _show == "Applicable buildings only":
                     _upg_df = _upg_df.filter(pl.col("applicable"))
-                _merged = _upg_df.join(
-                    baseline_bills, on="bldg_id", how="left"
-                ).with_columns(
-                    (pl.col("baseline_bill") - pl.col("annual_bill")).alias(
+                _savings_exprs = [
+                    (pl.col("baseline_bill") - pl.col("selected_bill")).alias(
                         "annual_savings"
                     )
-                )
+                ]
+                if comp_per_sqft:
+                    _savings_exprs.append(
+                        (
+                            pl.col("baseline_cost_per_sqft") - pl.col("cost_per_sqft")
+                        ).alias("annual_savings_per_sqft")
+                    )
+                _merged = _upg_df.join(
+                    baseline_bills, on=comp_join_keys, how="left"
+                ).with_columns(_savings_exprs)
                 _n_total = len(_upg_df)
                 _n_app = (
                     int(_upg_df["applicable"].sum())
                     if "applicable" in _upg_df.columns
                     else _n_total
                 )
-                _mean_sav = _merged["annual_savings"].mean()
+                _mean_sav = _merged[savings_value_col].mean()
                 _m1, _m2, _m3 = st.columns(3)
                 with _m1:
                     st.metric("Buildings", f"{_n_total:,}")
@@ -482,17 +534,32 @@ def render_results_page(app_state: AppState) -> None:
                 with _m3:
                     if _mean_sav is not None:
                         _sign = "+" if _mean_sav > 0 else ""
-                        st.metric("Mean Savings", f"{_sign}${_mean_sav:,.0f}")
+                        _val = (
+                            f"{_sign}${_mean_sav:,.2f}/ft²"
+                            if comp_per_sqft
+                            else f"{_sign}${_mean_sav:,.0f}"
+                        )
+                        st.metric("Mean Savings", _val)
 
                 # Summary statistics table
                 try:
                     _stats = _merged.select(
                         [
-                            pl.col("annual_savings").mean().alias("Mean ($)"),
-                            pl.col("annual_savings").median().alias("Median ($)"),
-                            pl.col("annual_savings").std().alias("Std Dev ($)"),
-                            pl.col("annual_savings").min().alias("Min ($)"),
-                            pl.col("annual_savings").max().alias("Max ($)"),
+                            pl.col(savings_value_col)
+                            .mean()
+                            .alias(f"Mean ({savings_unit})"),
+                            pl.col(savings_value_col)
+                            .median()
+                            .alias(f"Median ({savings_unit})"),
+                            pl.col(savings_value_col)
+                            .std()
+                            .alias(f"Std Dev ({savings_unit})"),
+                            pl.col(savings_value_col)
+                            .min()
+                            .alias(f"Min ({savings_unit})"),
+                            pl.col(savings_value_col)
+                            .max()
+                            .alias(f"Max ({savings_unit})"),
                         ]
                     )
                     st.dataframe(
@@ -505,7 +572,7 @@ def render_results_page(app_state: AppState) -> None:
 
                 # Box/whisker savings chart, split by applicability
                 try:
-                    _plot = _merged.filter(pl.col("annual_savings").is_not_null())
+                    _plot = _merged.filter(pl.col(savings_value_col).is_not_null())
                     if "applicable" in _plot.columns:
                         _plot = _plot.with_columns(
                             pl.when(pl.col("applicable"))
@@ -530,13 +597,17 @@ def render_results_page(app_state: AppState) -> None:
                         .mark_boxplot(extent="min-max", size=60)
                         .encode(
                             x=_x_enc,
-                            y=alt.Y("annual_savings:Q", title="Annual Savings ($)"),
+                            y=alt.Y(
+                                f"{savings_value_col}:Q",
+                                title=f"Annual Savings ({savings_unit})",
+                                axis=alt.Axis(format=comp_fmt),
+                            ),
                             color=_color,
                             tooltip=[
                                 alt.Tooltip(
-                                    "annual_savings:Q",
-                                    title="Savings ($)",
-                                    format="$.0f",
+                                    f"{savings_value_col}:Q",
+                                    title=f"Savings ({savings_unit})",
+                                    format=comp_fmt,
                                 )
                             ],
                         )
@@ -596,7 +667,18 @@ def render_results_page(app_state: AppState) -> None:
     st.divider()
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("Total Buildings", df["bldg_id"].n_unique())
+        if is_comstock and {"weight", "sqft"}.issubset(df.columns):
+            # Weighted floor area represented, reported instead of a building
+            # count (one scenario's rows; all scenarios cover the same stock).
+            _ref_upgrade = 0 if 0 in upgrades else upgrades[0]
+            _floor_area = (
+                df.filter(pl.col("upgrade") == _ref_upgrade)
+                .select((pl.col("weight") * pl.col("sqft")).sum())
+                .item()
+            )
+            st.metric("Total Floor Area", f"{(_floor_area or 0):,.0f} ft²")
+        else:
+            st.metric("Total Buildings", df["bldg_id"].n_unique())
     with col2:
         st.metric("Scenarios", df["upgrade"].n_unique())
     with col3:
