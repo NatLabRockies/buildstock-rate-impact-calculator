@@ -75,6 +75,14 @@ def _render_page(df_bytes: bytes, dataset_type: str, release: str) -> None:
     app_state.dataset_type = dataset_type
     app_state.release = release
     app_state.results_available = True
+    # Rate config exercised by the Configured Rates section.
+    app_state.rate_library = {
+        "Test Elec": {
+            "energyratestructure": [[{"rate": 0.12}]],
+            "fixedchargefirstmeter": 10.0,
+        }
+    }
+    app_state.rate_assignments = {"baseline": "Test Elec", "upgrade_1": "Test Elec"}
     render_results_page(app_state)
 
 
@@ -113,6 +121,10 @@ class TestComStockResultsPage:
     def test_energy_source_pills_present(self, comstock_page: AppTest) -> None:
         subheaders = [s.value for s in comstock_page.subheader]
         assert "Energy Sources" in subheaders
+
+    def test_configured_rates_section_present(self, comstock_page: AppTest) -> None:
+        subheaders = [s.value for s in comstock_page.subheader]
+        assert "Configured Rates" in subheaders
 
     def test_by_fuel_view_renders(self, comstock_page: AppTest) -> None:
         at = comstock_page

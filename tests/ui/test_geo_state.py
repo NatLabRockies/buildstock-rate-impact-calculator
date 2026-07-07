@@ -72,6 +72,24 @@ class TestEffectiveGeoSelection:
         assert sel["states"] == ["TX"]
         assert sel["county_ids"] == []
 
+    def test_comstock_drops_puma_selection(self) -> None:
+        """ComStock has no PUMA metadata — stale PUMA ids (e.g. from a loaded
+        project) are dropped from the effective selection."""
+        state = AppState()
+        state.dataset_type = "comstock"
+        state.selected_county_ids = ["G0800690"]
+        state.selected_puma_ids = ["G02000101"]
+        sel = state.effective_geo_selection()
+        assert sel["county_ids"] == ["G0800690"]
+        assert sel["puma_ids"] == []
+
+    def test_resstock_keeps_puma_selection(self) -> None:
+        state = AppState()
+        state.dataset_type = "resstock"
+        state.selected_puma_ids = ["G02000101"]
+        sel = state.effective_geo_selection()
+        assert sel["puma_ids"] == ["G02000101"]
+
 
 # ===========================================================================
 # apply_geo_filter

@@ -2,11 +2,11 @@
 Session-level helpers for dataset managers and geographically-scoped metadata.
 
 Metadata is loaded only after geographic selections are made (or explicitly for
-the whole dataset), restricted to the possibly-necessary columns
+the whole dataset on ResStock), restricted to the possibly-necessary columns
 (BuildStockDataManager.get_app_metadata_columns), and at the appropriate
-geographic resolution: ComStock county/PUMA selections load the
-by_state_and_county / by_state_and_puma aggregate files because the national
-aggregate only resolves location to state level.
+geographic resolution: ComStock always loads the non-aggregate
+by_state_and_county files (whole-state selections expand to every county in
+the state) because aggregate weights are not valid for bill calculations.
 """
 
 from __future__ import annotations

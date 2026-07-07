@@ -132,6 +132,9 @@ class AppState:
 
         Map-based selections take priority; legacy ``selected_geo_ids`` (CSV
         upload) are folded in by ``geo_level`` when the map fields are empty.
+        PUMA selections are dropped for ComStock — its metadata is only
+        available per county (aggregate PUMA weights are not valid for bill
+        calculations), so stale PUMA ids from loaded projects are ignored.
 
         Returns:
             Dict with keys ``states``, ``county_ids``, ``puma_ids``.
@@ -149,6 +152,9 @@ class AppState:
                 ]
             elif self.geo_level == "puma":
                 pumas = [self._to_gisjoin(g, "puma") for g in self.selected_geo_ids]
+
+        if (self.dataset_type or "").lower() == "comstock":
+            pumas = []
 
         return {"states": states, "county_ids": counties, "puma_ids": pumas}
 

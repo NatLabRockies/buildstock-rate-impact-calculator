@@ -434,6 +434,89 @@ class TestFilterMetadata:
         assert sorted(result["out.some_col"].to_list()) == [2.0, 3.0, 4.0]
 
 
+class TestFilterMinWeightedArea:
+    """Weighted-area floor filter for ComStock (weight × in.sqft..ft2)."""
+
+    def _comstock_mgr(self, tmp_path: Path) -> BuildStockDataManager:
+        return _make_mgr(tmp_path, dataset_type="comstock", release="2025_release_3")
+
+    def _df(self) -> pl.DataFrame:
+        # weighted areas: 0.01×1000=10, 0.02×5000=100, 1.0×1000=1000, 5.0×2000=10000
+        return pl.DataFrame(
+            {
+                "bldg_id": [1, 2, 3, 4],
+                "weight": [0.01, 0.02, 1.0, 5.0],
+                "in.sqft..ft2": [1000.0, 5000.0, 1000.0, 2000.0],
+            }
+        )
+
+    def test_drops_rows_below_default_threshold(self, tmp_path: Path) -> None:
+        mgr = self._comstock_mgr(tmp_path)
+        result = mgr.filter_min_weighted_area(self._df())  # default 333 ft²
+        # Only rows with weighted area ≥ 333 survive: bldg 3 (1000), bldg 4 (10000)
+        assert sorted(result["bldg_id"].to_list()) == [3, 4]
+
+    def test_custom_threshold(self, tmp_path: Path) -> None:
+        mgr = self._comstock_mgr(tmp_path)
+        result = mgr.filter_min_weighted_area(self._df(), min_weighted_area=50.0)
+        # weighted areas ≥ 50: bldg 2 (100), bldg 3 (1000), bldg 4 (10000)
+        assert sorted(result["bldg_id"].to_list()) == [2, 3, 4]
+
+    def test_threshold_is_inclusive(self, tmp_path: Path) -> None:
+        """A row exactly at the threshold is kept; just below is dropped."""
+        mgr = self._comstock_mgr(tmp_path)
+        df = pl.DataFrame(
+            {"bldg_id": [1, 2], "weight": [1.0, 1.0], "in.sqft..ft2": [332.0, 333.0]}
+        )
+        result = mgr.filter_min_weighted_area(df)
+        assert result["bldg_id"].to_list() == [2]
+
+    def test_no_rows_dropped_returns_frame(self, tmp_path: Path) -> None:
+        mgr = self._comstock_mgr(tmp_path)
+        df = pl.DataFrame({"bldg_id": [1], "weight": [10.0], "in.sqft..ft2": [1000.0]})
+        result = mgr.filter_min_weighted_area(df)
+        assert result["bldg_id"].to_list() == [1]
+        assert "_weighted_area_sqft" not in result.columns
+
+    def test_resstock_is_noop(self, tmp_path: Path) -> None:
+        """ResStock has no floor_area_column configured → unchanged frame."""
+        mgr = _make_mgr(tmp_path, dataset_type="resstock", release="2025_release_1")
+        df = pl.DataFrame({"bldg_id": [1, 2], "weight": [0.001, 0.001]})
+        result = mgr.filter_min_weighted_area(df)
+        assert result.height == 2
+
+    def test_missing_area_column_is_noop(self, tmp_path: Path) -> None:
+        mgr = self._comstock_mgr(tmp_path)
+        df = pl.DataFrame({"bldg_id": [1, 2], "weight": [0.001, 0.001]})
+        result = mgr.filter_min_weighted_area(df)
+        assert result.height == 2
+
+    def test_missing_weight_column_is_noop(self, tmp_path: Path) -> None:
+        mgr = self._comstock_mgr(tmp_path)
+        df = pl.DataFrame({"bldg_id": [1, 2], "in.sqft..ft2": [10.0, 20.0]})
+        result = mgr.filter_min_weighted_area(df)
+        assert result.height == 2
+
+    def test_no_leftover_helper_column(self, tmp_path: Path) -> None:
+        mgr = self._comstock_mgr(tmp_path)
+        result = mgr.filter_min_weighted_area(self._df())
+        assert "_weighted_area_sqft" not in result.columns
+
+    def test_logs_dropped_stats(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        mgr = self._comstock_mgr(tmp_path)
+        with caplog.at_level(logging.INFO):
+            mgr.filter_min_weighted_area(self._df())
+        msg = "\n".join(caplog.messages)
+        assert "dropped 2 of 4 rows" in msg
+        assert "50.00%" in msg  # 2/4 rows
+        # dropped weighted area = 10 + 100 = 110 of total 11110 ≈ 0.99%
+        assert "0.99% of total weighted floor area" in msg
+
+
 class TestIsNumericColumn:
     def test_detects_float_column(
         self, tmp_path: Path, sample_metadata: pl.DataFrame

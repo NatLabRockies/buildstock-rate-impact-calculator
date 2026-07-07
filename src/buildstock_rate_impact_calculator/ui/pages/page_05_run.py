@@ -167,6 +167,7 @@ def _calculate_fuel_bills(
     fuel_rate_assignments_for_scenario: dict,
     tracker: ProgressTracker,
     monthly_fuel_data: dict[str, pl.DataFrame] | None = None,
+    baseline_metadata: pl.DataFrame | None = None,
 ) -> pl.DataFrame | None:
     """Load upgrade metadata and calculate fuel bills for all buildings.
 
@@ -196,6 +197,10 @@ def _calculate_fuel_bills(
             mapping where each DataFrame holds monthly-summed fuel kWh (12
             rows × N fuel-timeseries columns). Required only when at least
             one assigned fuel rate has ``is_block_rate=True``.
+        baseline_metadata: The already-loaded, filtered, ``_row_uid``-tagged
+            metadata frame from the pipeline. Used directly for upgrade 0
+            (same rows as the electricity records) instead of re-loading the
+            baseline file from cache/S3.
 
     Returns:
         Polars DataFrame with columns
@@ -235,32 +240,35 @@ def _calculate_fuel_bills(
         return None
 
     # ── load metadata (geo-aware, column-projected) ────────────────────────
-    needed_cols: list[str] = [bldg_col, "weight"]
-    for _, _, col_name, _, _ in fuel_plan:
-        if col_name not in needed_cols:
-            needed_cols.append(col_name)
-    for geo_col in ("in.county", "in.puma"):
-        if geo_col not in needed_cols:
-            needed_cols.append(geo_col)
-
-    try:
-        tracker.update(
-            0,
-            message=f"Loading fuel/default bill data for upgrade {upgrade_id}…",
-        )
-        upgrade_meta = mgr.load_upgrade_metadata(upgrade_id, columns=needed_cols)
-        upgrade_meta = upgrade_meta.filter(pl.col(bldg_col).is_in(building_ids))
-        if dataset_type != "comstock":
-            upgrade_meta = upgrade_meta.unique(subset=[bldg_col])
-        upgrade_meta = _assign_row_uid(upgrade_meta, dataset_type, bldg_col)
-    except Exception as exc:
-        tracker.update(
-            0,
-            message=(
-                f"Warning: Could not load fuel metadata for upgrade {upgrade_id}: {exc}"
-            ),
-        )
-        return None
+    # Upgrade 0 reuses the pipeline's in-memory metadata frame: it already
+    # carries the fuel columns (part of the app column set), the user filters,
+    # and the same _row_uid values as the electricity records. Upgrades load
+    # their metadata file with the standard app column set so the projected
+    # cache file is shared with other consumers (e.g. applicability checks).
+    if upgrade_id == 0 and baseline_metadata is not None:
+        upgrade_meta = baseline_metadata
+        if "_row_uid" not in upgrade_meta.columns:
+            upgrade_meta = _assign_row_uid(upgrade_meta, dataset_type, bldg_col)
+    else:
+        try:
+            tracker.update(
+                0,
+                message=f"Loading fuel/default bill data for upgrade {upgrade_id}…",
+            )
+            upgrade_meta = mgr.load_upgrade_metadata(upgrade_id)
+            upgrade_meta = upgrade_meta.filter(pl.col(bldg_col).is_in(building_ids))
+            if dataset_type != "comstock":
+                upgrade_meta = upgrade_meta.unique(subset=[bldg_col])
+            upgrade_meta = _assign_row_uid(upgrade_meta, dataset_type, bldg_col)
+        except Exception as exc:
+            tracker.update(
+                0,
+                message=(
+                    f"Warning: Could not load fuel metadata for upgrade "
+                    f"{upgrade_id}: {exc}"
+                ),
+            )
+            return None
 
     if upgrade_meta.height == 0:
         return None
@@ -374,9 +382,7 @@ def _calculate_fuel_bills(
                 else:
                     raw = pl.col(mcol).cast(pl.Float64).fill_null(0.0)
                     monthly_exprs.append(raw * weight_expr if is_comstock else raw)
-            bill_expr = fuel_bill_expr(
-                rate_dict, monthly_kwh_exprs=monthly_exprs
-            )
+            bill_expr = fuel_bill_expr(rate_dict, monthly_kwh_exprs=monthly_exprs)
         else:
             annual_kwh = pl.col(col_name).cast(pl.Float64).fill_null(0.0)
             if is_comstock:
@@ -396,10 +402,15 @@ def _run_pipeline(
     result_store: dict,
     resolved_rate_assignments: dict,
     resolved_fuel_rate_assignments: dict,
+    preloaded_metadata: pl.DataFrame | None = None,
 ) -> None:
     """
     Background thread: download timeseries then calculate bills.
     Writes results into result_store["df"] on completion.
+
+    ``preloaded_metadata`` is the session-cached metadata frame resolved on
+    the main thread; passing it avoids re-reading the projected metadata cache
+    from disk (or S3) inside the worker thread.
     """
     try:
         from buildstock_rate_impact_calculator.data.buildstock_manager import (
@@ -428,9 +439,14 @@ def _run_pipeline(
 
         # ── load metadata (geo-appropriate files, needed columns only) ───────
         tracker.start_phase("Loading building metadata")
-        metadata = mgr.load_metadata(
-            additional_columns=list(app_state.additional_columns or []) or None,
-        )
+        if preloaded_metadata is not None:
+            metadata = preloaded_metadata
+            mgr._metadata = metadata
+            mgr._update_state_mapping(metadata)
+        else:
+            metadata = mgr.load_metadata(
+                additional_columns=list(app_state.additional_columns or []) or None,
+            )
         metadata = app_state.apply_geo_filter(metadata)
         if app_state.active_filters:
             _filters = {
@@ -439,6 +455,22 @@ def _run_pipeline(
                 if k in metadata.columns
             }
             metadata = mgr.filter_metadata(metadata, _filters)
+
+        # Drop rows whose weighted real-world floor area is unrealistically
+        # small (tiny sample weights → inflated cost-per-ft²). No-op for
+        # ResStock. See BuildStockDataManager.MIN_WEIGHTED_AREA_SQFT.
+        _rows_before = metadata.height
+        metadata = mgr.filter_min_weighted_area(metadata)
+        _rows_dropped = _rows_before - metadata.height
+        if _rows_dropped > 0:
+            from buildstock_rate_impact_calculator.data.buildstock_manager import (
+                MIN_WEIGHTED_AREA_SQFT,
+            )
+
+            tracker.log(
+                f"Excluded {_rows_dropped:,} building(s) with weighted area "
+                f"≤ {MIN_WEIGHTED_AREA_SQFT:g} ft²."
+            )
 
         # Stable per-row identifier (ComStock: one bldg_id may span multiple
         # geographic aggregates, each with a different weight). Used as a join
@@ -516,32 +548,14 @@ def _run_pipeline(
         cached_pairs = {pair for pair in all_pairs if _is_cached(*pair)}
         missing_pairs = all_pairs - cached_pairs
 
-        ts_data: dict[str, pl.DataFrame] = {}
-
-        # Load already-downloaded files from disk
         if cached_pairs:
-            n_cached = len(cached_pairs)
-            tracker.start_phase(
-                f"Loading {n_cached:,} cached timeseries files from disk",
-                total=n_cached,
+            tracker.log(
+                f"{len(cached_pairs):,} timeseries files already cached on disk."
             )
-            cached_bldgs_by_upg: dict[int, list] = {}
-            for bldg, upg in cached_pairs:
-                cached_bldgs_by_upg.setdefault(upg, []).append(bldg)
-            for upg, bldgs in cached_bldgs_by_upg.items():
-                ts_data.update(
-                    mgr.load_cached_timeseries(
-                        building_ids=bldgs,
-                        upgrades=[upg],
-                        output_dir=ts_dir,
-                    )
-                )
-                tracker.advance(
-                    len(bldgs), message=f"Loaded cached files for upgrade {upg}"
-                )
-            tracker.log(f"Loaded {n_cached:,} cached timeseries files from disk.")
 
-        # Download only the missing files
+        # Download only the missing files. Downloads are written to disk and
+        # re-read per scenario below, so only one scenario's load profiles are
+        # held in memory at a time.
         if missing_pairs:
             n_missing = len(missing_pairs)
             tracker.start_phase(
@@ -557,15 +571,13 @@ def _run_pipeline(
             for upg, bldgs in missing_bldgs_by_upg.items():
                 if tracker.is_cancelled():
                     break
-                ts_data.update(
-                    mgr.download_timeseries_with_progress(
-                        building_ids=bldgs,
-                        upgrades=[upg],
-                        output_dir=ts_dir,
-                        progress_cb=dl_progress,
-                        cancel_event=tracker.cancel_event,
-                        monthly_fuel_columns=block_fuel_ts_cols or None,
-                    )
+                mgr.download_timeseries_with_progress(
+                    building_ids=bldgs,
+                    upgrades=[upg],
+                    output_dir=ts_dir,
+                    progress_cb=dl_progress,
+                    cancel_event=tracker.cancel_event,
+                    monthly_fuel_columns=block_fuel_ts_cols or None,
                 )
             if not tracker.is_cancelled():
                 tracker.log(f"Downloaded {n_missing:,} timeseries files.")
@@ -574,9 +586,29 @@ def _run_pipeline(
             tracker.done(message="Download cancelled.")
             return
 
-        if not ts_data:
+        available_pairs = {pair for pair in all_pairs if _is_cached(*pair)}
+        if not available_pairs:
             tracker.error("No timeseries data was downloaded.")
             return
+
+        # Baseline profiles serve every scenario (the baseline scenario itself
+        # plus the fall-back for unapplicable buildings), so they are loaded
+        # once and kept; upgrade-specific profiles are loaded per scenario and
+        # released afterwards.
+        baseline_bldgs = sorted({b for b, u in available_pairs if u == 0})
+        baseline_ts: dict[str, pl.DataFrame] = {}
+        if baseline_bldgs:
+            tracker.start_phase(
+                f"Loading {len(baseline_bldgs):,} baseline timeseries files from disk"
+            )
+            baseline_ts = mgr.load_cached_timeseries(
+                building_ids=baseline_bldgs,
+                upgrades=[0],
+                output_dir=ts_dir,
+            )
+            tracker.log(
+                f"Loaded {len(baseline_ts):,} baseline timeseries files from disk."
+            )
 
         # Load monthly-fuel companion files for all (bldg, upgrade) pairs in
         # play. Empty when no block-rate fuel rates are configured.
@@ -608,13 +640,29 @@ def _run_pipeline(
                 continue
 
             applicable_set = set(upgrade_applicable_ids.get(upgrade_id, building_ids))
+
+            # Load this scenario's upgrade-specific profiles from disk; merged
+            # with the persistent baseline dict for fall-back lookups.
+            if upgrade_id != 0:
+                upgrade_bldgs = sorted(
+                    {b for b, u in available_pairs if u == upgrade_id}
+                )
+                upgrade_ts = mgr.load_cached_timeseries(
+                    building_ids=upgrade_bldgs,
+                    upgrades=[upgrade_id],
+                    output_dir=ts_dir,
+                )
+                ts_lookup = {**baseline_ts, **upgrade_ts}
+            else:
+                ts_lookup = baseline_ts
+
             # ComStock: one record per metadata row (load × weight applied here
             # so PySAM bills are real-world weighted dollars).
             # ResStock: one record per unique bldg_id; loads passed unscaled,
             # the scalar dataset weight is applied at aggregation time.
             load_records = _build_load_records(
                 metadata=metadata,
-                ts_data=ts_data,
+                ts_data=ts_lookup,
                 dataset_type=mgr.config.dataset_type,
                 load_column=load_column,
                 scalar_weight=scalar_weight,
@@ -622,6 +670,11 @@ def _run_pipeline(
                 applicable_set=applicable_set,
                 bldg_col=mgr.config.building_id_column,
             )
+            # Upgrade-specific frames are no longer needed once the records
+            # hold their load arrays — release before the PySAM phase.
+            ts_lookup = None
+            if upgrade_id != 0:
+                upgrade_ts = None
 
             if not load_records:
                 tracker.log(
@@ -677,6 +730,7 @@ def _run_pipeline(
                 fuel_rate_assignments_for_scenario=fuel_rates_for_scenario,
                 tracker=tracker,
                 monthly_fuel_data=monthly_fuel_data,
+                baseline_metadata=metadata,
             )
             if fuel_df is not None:
                 fuel_frames.append(fuel_df)
@@ -906,6 +960,19 @@ def render_run_page(app_state: AppState) -> None:
         if st.button(
             "▶ Start Download & Calculate", type="primary", disabled=start_blocked
         ):
+            # Resolve (or reuse) the session-cached metadata on the main
+            # thread so the worker doesn't re-read it from disk/S3.
+            from buildstock_rate_impact_calculator.ui.metadata_session import (
+                load_session_metadata,
+            )
+
+            try:
+                with st.spinner("Preparing building metadata…"):
+                    _, _preloaded_metadata = load_session_metadata(app_state)
+            except Exception as exc:
+                st.error(f"Cannot start run — failed to load metadata: {exc}")
+                return
+
             new_tracker = ProgressTracker()
             new_results: dict = {}
             # Resolve rate names → full dicts before handing off to background thread
@@ -931,6 +998,7 @@ def render_run_page(app_state: AppState) -> None:
                     new_results,
                     _resolved_rates,
                     _resolved_fuel,
+                    _preloaded_metadata,
                 ),
                 daemon=True,
             )
@@ -944,12 +1012,16 @@ def render_run_page(app_state: AppState) -> None:
 
     # ── Live progress display ─────────────────────────────────────────────────
     # The panel runs as an auto-refreshing fragment: while the pipeline is
-    # running, only this panel re-renders (every second) instead of the whole
-    # app, which keeps the page responsive during downloads/calculations.
+    # running, only this panel re-renders (not the whole app). Each tick is a
+    # fragment rerun, so Streamlit briefly shows the Running/Stop toolbar and
+    # dims the panel while it re-renders — expected polling behavior. The
+    # interval is 2s: during the PySAM billing phase the worker threads hold
+    # the GIL for long stretches, so more frequent ticks just queue up and
+    # make the dimming more visible without adding information.
     if is_running:
         st.session_state["_run_finish_pending"] = True
 
-    @st.fragment(run_every=1.0 if is_running else None)
+    @st.fragment(run_every=2.0 if is_running else None)
     def _progress_fragment() -> None:
         t = st.session_state.get("run_thread")
         still_running = t is not None and t.is_alive()
@@ -965,6 +1037,9 @@ def render_run_page(app_state: AppState) -> None:
     # ── Results available ─────────────────────────────────────────────────────
     if not is_running and result_store.get("df") is not None:
         app_state.results_available = True
+        # A fresh run supersedes any project-loaded results frame; drop the
+        # stale copy so only one results DataFrame is held in session memory.
+        st.session_state.pop("results_df", None)
         df = result_store["df"]
         st.divider()
         st.success(f"Calculation complete — {len(df):,} building-scenario results.")

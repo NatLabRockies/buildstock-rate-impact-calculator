@@ -6,6 +6,10 @@ Provides helpers for parsing, validating, and querying geographic identifiers
 """
 
 from __future__ import annotations
+import json
+from functools import lru_cache
+from importlib.resources import files
+
 import requests
 from typing import Tuple
 
@@ -66,13 +70,55 @@ _US_STATES: frozenset[str] = frozenset(
     }
 )
 
-# Geo levels supported per dataset type
+# Geo levels supported per dataset type. ComStock excludes PUMA: only the
+# non-aggregate by_state_and_county metadata carries per-row weights that are
+# valid for utility-bill calculations (aggregate weights are not).
 _SUPPORTED_GEO_LEVELS: dict[str, set[str]] = {
     "resstock": {"state", "county", "puma"},
-    "comstock": {"state", "county", "puma", "census_tract"},
+    "comstock": {"state", "county", "census_tract"},
 }
 
 _URDB_BASE_URL = "https://api.openei.org/utility_rates"
+
+
+@lru_cache(maxsize=1)
+def _county_gisjoins_by_state() -> dict[str, tuple[str, ...]]:
+    """Map USPS state abbreviation → sorted county GISJOIN ids, parsed once
+    from the bundled Census county boundary file."""
+    # Imported lazily to avoid a circular module import.
+    from buildstock_rate_impact_calculator.data.buildstock_manager import (
+        _STATEFP_TO_USPS,
+    )
+
+    data_path = files("buildstock_rate_impact_calculator.data").joinpath(
+        "cb_2019_us_county_500k.geojson"
+    )
+    with data_path.open("r", encoding="utf-8") as fh:
+        geojson = json.load(fh)
+
+    by_state: dict[str, set[str]] = {}
+    for feat in geojson.get("features", []):
+        props = feat.get("properties", {})
+        statefp = props.get("STATEFP")
+        countyfp = props.get("COUNTYFP")
+        abbr = _STATEFP_TO_USPS.get(statefp)
+        if abbr and countyfp:
+            by_state.setdefault(abbr, set()).add(f"G{statefp}0{countyfp}0")
+    return {abbr: tuple(sorted(ids)) for abbr, ids in by_state.items()}
+
+
+def counties_for_states(states: list[str] | tuple[str, ...]) -> list[str]:
+    """Return the sorted county GISJOIN ids covering the given states.
+
+    Used to expand whole-state selections into per-county metadata files for
+    datasets without a national metadata file (ComStock). Unknown state
+    abbreviations are silently skipped.
+    """
+    mapping = _county_gisjoins_by_state()
+    result: set[str] = set()
+    for state in states:
+        result.update(mapping.get(str(state).strip().upper(), ()))
+    return sorted(result)
 
 
 def parse_csv_geo_ids(csv_bytes: bytes, geo_level: str) -> list[str]:

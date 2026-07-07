@@ -53,6 +53,37 @@ def _apply_geographic_selection(app_state: AppState) -> None:
         )
         return
 
+    # ComStock metadata is only available per county — require a selection and
+    # warn when whole states expand to many county files.
+    if (app_state.dataset_type or "").lower() == "comstock":
+        sel = app_state.effective_geo_selection()
+        if not (sel["states"] or sel["county_ids"]):
+            st.error(
+                "ComStock metadata is only available per county. Select one or "
+                "more states or counties before loading metadata."
+            )
+            return
+
+        from buildstock_rate_impact_calculator.ui.applicability import format_bytes
+        from buildstock_rate_impact_calculator.ui.metadata_session import get_manager
+
+        mgr = get_manager(app_state)
+        n_files = len(mgr.metadata_uris_for_upgrade(0))
+        n_scenarios = len(set(app_state.selected_upgrades or []) | {0})
+        est_bytes = mgr.estimate_metadata_download_size(app_state.selected_upgrades)
+        est_note = (
+            f"{n_files:,} county metadata file(s) × {n_scenarios} scenario(s) "
+            f"≈ {format_bytes(est_bytes)} (cached on disk after the first load)"
+        )
+        if sel["states"] and not sel["county_ids"]:
+            st.warning(
+                f"Whole-state selection: ComStock metadata will be downloaded "
+                f"for every county in {', '.join(sorted(sel['states']))} — "
+                f"{est_note}. Consider selecting specific counties."
+            )
+        else:
+            st.caption(f"Estimated metadata download: {est_note}.")
+
     with st.spinner("Loading building metadata for the selected geographies…"):
         try:
             mgr, metadata = load_session_metadata(app_state)
@@ -118,11 +149,19 @@ def render_geography_page(app_state: AppState) -> None:
 
     # ── Tab 1: Interactive Map ────────────────────────────────────────────────
     with map_tab:
-        st.markdown(
-            "Select one or more states using the multiselect, then click "
-            "**Select Counties** or **Select PUMAs** to drill into sub-state "
-            "boundaries.  County and PUMA selections are tracked independently."
-        )
+        if (app_state.dataset_type or "").lower() == "comstock":
+            st.markdown(
+                "Select one or more states on the map, then click "
+                "**Select Counties** to drill into county boundaries. "
+                "ComStock metadata is per-county: saving whole states downloads "
+                "metadata for every county in those states."
+            )
+        else:
+            st.markdown(
+                "Select one or more states using the multiselect, then click "
+                "**Select Counties** or **Select PUMAs** to drill into sub-state "
+                "boundaries.  County and PUMA selections are tracked independently."
+            )
 
         map_result = render_map_selector(
             dataset_type=app_state.dataset_type,
@@ -147,10 +186,12 @@ def render_geography_page(app_state: AppState) -> None:
             "(state abbreviations, county FIPS codes, PUMA codes, or census tract codes)."
         )
 
-        # Geo level selector for CSV
-        csv_level_options = ["state", "county", "puma"]
+        # Geo level selector for CSV. ComStock has no PUMA metadata (county
+        # files only), so PUMA upload is offered for ResStock alone.
         if app_state.dataset_type == "comstock":
-            csv_level_options.append("census_tract")
+            csv_level_options = ["state", "county", "census_tract"]
+        else:
+            csv_level_options = ["state", "county", "puma"]
 
         csv_geo_level = st.radio(
             "Geographic level in CSV",

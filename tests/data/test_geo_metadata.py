@@ -54,6 +54,57 @@ class TestStateForGisjoin:
 
 
 # ===========================================================================
+# counties_for_states (geo_utils)
+# ===========================================================================
+
+
+class TestCountiesForStates:
+    def test_returns_gisjoins_for_state(self) -> None:
+        from buildstock_rate_impact_calculator.data.geo_utils import (
+            counties_for_states,
+        )
+
+        counties = counties_for_states(["AK"])
+        assert len(counties) > 0
+        assert all(c.startswith("G02") for c in counties)
+        assert counties == sorted(set(counties))
+
+    def test_multiple_states_union(self) -> None:
+        from buildstock_rate_impact_calculator.data.geo_utils import (
+            counties_for_states,
+        )
+
+        ak = counties_for_states(["AK"])
+        co = counties_for_states(["co"])  # case-insensitive
+        both = counties_for_states(["AK", "CO"])
+        assert set(both) == set(ak) | set(co)
+
+    def test_unknown_state_skipped(self) -> None:
+        from buildstock_rate_impact_calculator.data.geo_utils import (
+            counties_for_states,
+        )
+
+        assert counties_for_states(["ZZ"]) == []
+
+
+class TestSupportedGeoLevels:
+    def test_puma_not_supported_for_comstock(self) -> None:
+        from buildstock_rate_impact_calculator.data.geo_utils import validate_geo_ids
+
+        with pytest.raises(ValueError, match="not supported"):
+            validate_geo_ids(["0800803"], geo_level="puma", dataset_type="comstock")
+
+    def test_puma_still_supported_for_resstock(self) -> None:
+        from buildstock_rate_impact_calculator.data.geo_utils import validate_geo_ids
+
+        valid, invalid = validate_geo_ids(
+            ["0800803"], geo_level="puma", dataset_type="resstock"
+        )
+        assert valid == ["0800803"]
+        assert invalid == []
+
+
+# ===========================================================================
 # set_geo_selection / uses_geo_metadata / metadata_uris_for_upgrade
 # ===========================================================================
 
@@ -66,13 +117,27 @@ class TestGeoUriConstruction:
         uris = mgr.metadata_uris_for_upgrade(0)
         assert uris == [mgr.metadata_uri]
 
-    def test_comstock_without_county_puma_uses_national(self, tmp_path: Path) -> None:
+    def test_comstock_without_geo_selection_raises(self, tmp_path: Path) -> None:
+        """ComStock has no national metadata file — aggregate weights are not
+        valid for bill calculations, so a geographic selection is required."""
         mgr = _make_mgr(tmp_path)
-        mgr.set_geo_selection(states=["CO", "NY"])
-        assert mgr.uses_geo_metadata() is False
+        with pytest.raises(RuntimeError, match="county"):
+            mgr.metadata_uris_for_upgrade(0)
+
+    def test_comstock_states_expand_to_counties(self, tmp_path: Path) -> None:
+        """A states-only selection expands to every county in those states."""
+        from buildstock_rate_impact_calculator.data.geo_utils import (
+            counties_for_states,
+        )
+
+        mgr = _make_mgr(tmp_path)
+        mgr.set_geo_selection(states=["AK"])
+        assert mgr.uses_geo_metadata() is True
         uris = mgr.metadata_uris_for_upgrade(0)
-        assert len(uris) == 1
-        assert uris[0].endswith("national/full/parquet/upgrade0_agg.parquet")
+        expected_counties = counties_for_states(["AK"])
+        assert len(uris) == len(expected_counties) > 0
+        assert all("state=AK/county=G02" in u for u in uris)
+        assert all("metadata_and_annual_results/by_state_and_county" in u for u in uris)
 
     def test_comstock_county_uris_2025(self, tmp_path: Path) -> None:
         mgr = _make_mgr(tmp_path)
@@ -90,24 +155,22 @@ class TestGeoUriConstruction:
         )
         assert all(u.startswith("s3://oedi-data-lake/") for u in uris)
 
-    def test_comstock_puma_uris_2025(self, tmp_path: Path) -> None:
+    def test_comstock_puma_selection_ignored(self, tmp_path: Path) -> None:
+        """PUMA is unsupported for ComStock — no puma path is configured, so a
+        PUMA-only selection resolves to zero metadata URIs."""
         mgr = _make_mgr(tmp_path)
         mgr.set_geo_selection(puma_ids=["G02000101"])
         uris = mgr.metadata_uris_for_upgrade(3)
-        assert len(uris) == 1
-        # PUMA metadata only exists in the aggregates tree
-        assert uris[0].endswith(
-            "metadata_and_annual_results_aggregates/by_state_and_puma/full/"
-            "parquet/state=AK/puma=G02000101/AK_G02000101_upgrade3_agg.parquet"
-        )
+        assert uris == []
 
-    def test_comstock_mixed_county_and_puma(self, tmp_path: Path) -> None:
+    def test_comstock_mixed_county_and_puma_keeps_county_only(
+        self, tmp_path: Path
+    ) -> None:
         mgr = _make_mgr(tmp_path)
         mgr.set_geo_selection(county_ids=["G0200130"], puma_ids=["G02000101"])
         uris = mgr.metadata_uris_for_upgrade(0)
-        assert len(uris) == 2
-        assert any("by_state_and_county" in u for u in uris)
-        assert any("by_state_and_puma" in u for u in uris)
+        assert len(uris) == 1
+        assert "by_state_and_county" in uris[0]
 
     def test_comstock_2024_tokens(self, tmp_path: Path) -> None:
         mgr = _make_mgr(tmp_path, release="2024_release_2")
@@ -122,6 +185,27 @@ class TestGeoUriConstruction:
         mgr.set_geo_selection(county_ids=["G0200130", "BOGUS"])
         uris = mgr.metadata_uris_for_upgrade(0)
         assert len(uris) == 1
+
+    def test_estimate_metadata_download_size_counties(self, tmp_path: Path) -> None:
+        mgr = _make_mgr(tmp_path)
+        mgr.set_geo_selection(county_ids=["G0200130", "G0800690"])
+        # 2 county files × 2 scenarios (baseline always included alongside 3)
+        est = mgr.estimate_metadata_download_size(upgrades=[0, 3])
+        assert est == 2 * 2 * BuildStockDataManager._METADATA_BYTES_PER_GEO_FILE
+
+    def test_estimate_metadata_download_size_no_selection_is_zero(
+        self, tmp_path: Path
+    ) -> None:
+        mgr = _make_mgr(tmp_path)
+        assert mgr.estimate_metadata_download_size(upgrades=[0, 3]) == 0
+
+    def test_estimate_metadata_download_size_resstock_national(
+        self, tmp_path: Path
+    ) -> None:
+        mgr = _make_mgr(tmp_path, dataset_type="resstock", release="2025_release_1")
+        est = mgr.estimate_metadata_download_size(upgrades=[3])
+        # 1 national file × 2 scenarios (baseline + upgrade 3)
+        assert est == 1 * 2 * BuildStockDataManager._METADATA_BYTES_PER_NATIONAL_FILE
 
     def test_changing_selection_clears_loaded_metadata(self, tmp_path: Path) -> None:
         mgr = _make_mgr(tmp_path)
@@ -308,13 +392,13 @@ class TestLoadUpgradeMetadata:
 class TestIntegrationGeoMetadata:
     """Live OEDI checks for the ComStock sub-state metadata path."""
 
-    def test_comstock_county_puma_load(self, tmp_path: Path) -> None:
+    def test_comstock_multi_county_load(self, tmp_path: Path) -> None:
         mgr = _make_mgr(tmp_path, cache_enabled=True)
-        # Denver county (CO) + one Anchorage PUMA (AK)
-        mgr.set_geo_selection(county_ids=["G0800310"], puma_ids=["G02000101"])
+        # Denver county (CO) + Aleutians East (AK)
+        mgr.set_geo_selection(county_ids=["G0800310", "G0200130"])
         md = mgr.load_metadata()
         assert len(md) > 0
-        assert "in.county" in md.columns and "in.puma" in md.columns
+        assert "in.county" in md.columns
         assert set(md["in.state"].unique().to_list()) == {"AK", "CO"}
         # Only the possibly-necessary columns are downloaded (full file has 1300+)
         assert len(md.columns) < 30
@@ -335,6 +419,8 @@ class TestGeoApplicability:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         mgr = _make_mgr(tmp_path)
+        # ComStock requires a geo selection for URI construction
+        mgr.set_geo_selection(county_ids=["G0200130"])
         fake_df = pl.DataFrame(
             {"bldg_id": [1, 2, 3], "applicability": [True, False, True]}
         )

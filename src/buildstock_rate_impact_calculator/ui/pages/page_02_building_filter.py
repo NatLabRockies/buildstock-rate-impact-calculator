@@ -114,6 +114,14 @@ def render_building_filter_page(app_state: AppState) -> None:
                     st.error(f"Failed to load metadata: {exc}")
                     return
         else:
+            if (app_state.dataset_type or "").lower() == "comstock":
+                # ComStock has no national metadata file — per-county only.
+                st.info(
+                    "ComStock metadata is only available per county. Select "
+                    "states or counties on the Geography tab first (whole-state "
+                    "selections download every county in the state)."
+                )
+                return
             st.info(
                 "No geographic selections have been made yet. Select geographies "
                 "on the Geography tab, or load metadata for the entire dataset below."
@@ -301,7 +309,13 @@ def render_building_filter_page(app_state: AppState) -> None:
         st.metric("Active Filters", total_filter_count)
     with col3:
         st.metric(
-            "Est. Download Size", format_bytes(app_state.estimated_download_bytes)
+            "Est. Timeseries Download",
+            format_bytes(app_state.estimated_download_bytes),
+            help=(
+                "Estimated download for the per-building load profiles at run "
+                "time. Metadata for the geographic selection has already been "
+                "downloaded and cached."
+            ),
         )
 
     if app_state.building_count == 0:

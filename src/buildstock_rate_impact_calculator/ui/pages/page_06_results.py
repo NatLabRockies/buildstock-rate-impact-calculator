@@ -32,6 +32,182 @@ def _scenario_display(base_uri: str, upgrade_id: int) -> str:
     return label if upgrade_id == 0 else f"Upgrade {upgrade_id}: {label}"
 
 
+# ---------------------------------------------------------------------------
+# Configured-rates summary helpers (pure functions, unit-testable)
+# ---------------------------------------------------------------------------
+
+
+def _fmt_rate_range(lo: float, hi: float, unit: str, decimals: int) -> str:
+    """'$0.0800–$0.1200/kWh' or '$0.1200/kWh' when lo == hi."""
+    if abs(lo - hi) < 0.5 * 10**-decimals:
+        return f"${lo:,.{decimals}f}{unit}"
+    return f"${lo:,.{decimals}f}–${hi:,.{decimals}f}{unit}"
+
+
+def _tier_rates(structure: list) -> list[float]:
+    """Flatten a URDB period/tier structure into effective rates (rate + adj)."""
+    return [
+        float(tier.get("rate", 0.0)) + float(tier.get("adj", 0.0) or 0.0)
+        for period in (structure or [])
+        for tier in period
+    ]
+
+
+def _electricity_charge_summary(rate: dict) -> dict[str, str]:
+    """Display strings for a URDB-format electricity rate's charge components.
+
+    Returns a dict with ``fixed``, ``energy``, and ``demand`` keys. URDB rates
+    that have not been fetched yet (label-only) are flagged as such.
+    """
+    if "energyratestructure" not in rate:
+        if "label" in rate:
+            note = f"URDB rate {rate['label']} — details fetched at run time"
+        else:
+            note = "—"
+        return {"fixed": "—", "energy": note, "demand": "—"}
+
+    fixed_val = rate.get("fixedchargefirstmeter")
+    if fixed_val is not None:
+        fixed_units = str(rate.get("fixedchargeunits") or "$/month")
+        unit_suffix = fixed_units[1:] if fixed_units.startswith("$") else fixed_units
+        fixed = f"${float(fixed_val):,.2f}{unit_suffix}"
+    else:
+        fixed = "—"
+
+    energy_rates = _tier_rates(rate.get("energyratestructure"))
+    if energy_rates:
+        periods = rate.get("energyratestructure") or []
+        n_periods = len(periods)
+        n_tiers = sum(len(p) for p in periods)
+        energy = _fmt_rate_range(min(energy_rates), max(energy_rates), "/kWh", 4)
+        quals = []
+        if n_periods > 1:
+            quals.append(f"{n_periods} TOU periods")
+        if n_tiers > n_periods:
+            quals.append("tiered")
+        if quals:
+            energy += f" ({', '.join(quals)})"
+    else:
+        energy = "—"
+
+    demand_parts = []
+    tou_demand = _tier_rates(rate.get("demandratestructure"))
+    if tou_demand:
+        demand_parts.append(
+            _fmt_rate_range(min(tou_demand), max(tou_demand), "/kW", 2) + " (TOU)"
+        )
+    flat_demand = _tier_rates(rate.get("flatdemandstructure"))
+    if flat_demand:
+        demand_parts.append(
+            _fmt_rate_range(min(flat_demand), max(flat_demand), "/kW", 2) + " (monthly)"
+        )
+    demand = "; ".join(demand_parts) if demand_parts else "—"
+
+    return {"fixed": fixed, "energy": energy, "demand": demand}
+
+
+def _fuel_charge_summary(rate: dict) -> dict[str, str]:
+    """Display strings for a custom fuel rate's charge components."""
+    fixed = f"${float(rate.get('fixed_monthly_charge', 0.0) or 0.0):,.2f}/month"
+    if rate.get("is_block_rate"):
+        blocks = rate.get("blocks") or []
+        unit = str(rate.get("block_unit", "$/Therm"))
+        unit_suffix = unit[1:] if unit.startswith("$") else unit
+        block_rates = [float(b.get("rate", 0.0)) for b in blocks]
+        if block_rates:
+            energy = (
+                _fmt_rate_range(min(block_rates), max(block_rates), unit_suffix, 2)
+                + f" ({len(blocks)} blocks)"
+            )
+        else:
+            energy = "—"
+    else:
+        unit = str(rate.get("rate_unit", "$/Therm"))
+        unit_suffix = unit[1:] if unit.startswith("$") else unit
+        energy = f"${float(rate.get('flat_rate', 0.0)):,.2f}{unit_suffix} flat"
+    return {"fixed": fixed, "energy": energy, "demand": "—"}
+
+
+def _build_rates_summary_rows(
+    app_state: AppState,
+    upgrade_ids: list[int],
+    base_uri: str,
+    result_columns: set[str],
+) -> list[dict[str, str]]:
+    """Rows for the Configured Rates table.
+
+    One row per (rate, energy source) with its charge components and the
+    scenarios it applies to. Fuels present in the results without an assigned
+    rate get a 'Dataset default' row.
+    """
+    from buildstock_rate_impact_calculator.rates.fuel_rate import (
+        FUEL_TYPE_LABELS,
+        FUEL_TYPES,
+    )
+
+    def _scenario_key(u: int) -> str:
+        return "baseline" if u == 0 else f"upgrade_{u}"
+
+    sk_labels = {
+        _scenario_key(u): _scenario_display(base_uri, u) for u in sorted(upgrade_ids)
+    }
+
+    rows: list[dict[str, str]] = []
+
+    # Electricity — group scenarios by assigned rate name.
+    elec_applies: dict[str, list[str]] = {}
+    for sk, label in sk_labels.items():
+        name = (app_state.rate_assignments or {}).get(sk)
+        if name:
+            elec_applies.setdefault(name, []).append(label)
+    for name, labels in elec_applies.items():
+        parts = _electricity_charge_summary(app_state.rate_library.get(name, {}))
+        rows.append(
+            {
+                "Rate": name,
+                "Energy Source": "Electricity",
+                "Fixed Charge": parts["fixed"],
+                "Energy Charges": parts["energy"],
+                "Demand Charges": parts["demand"],
+                "Applies To": ", ".join(labels),
+            }
+        )
+
+    # Fuels — only those actually present in the results frame.
+    for ft in FUEL_TYPES:
+        if f"{ft}_bill" not in result_columns:
+            continue
+        ft_applies: dict[str | None, list[str]] = {}
+        for sk, label in sk_labels.items():
+            name = ((app_state.fuel_rate_assignments or {}).get(sk) or {}).get(ft)
+            ft_applies.setdefault(name, []).append(label)
+        for name, labels in ft_applies.items():
+            if name is None:
+                rows.append(
+                    {
+                        "Rate": "Dataset default",
+                        "Energy Source": FUEL_TYPE_LABELS[ft],
+                        "Fixed Charge": "—",
+                        "Energy Charges": "Annual fuel bill from dataset metadata",
+                        "Demand Charges": "—",
+                        "Applies To": ", ".join(labels),
+                    }
+                )
+            else:
+                parts = _fuel_charge_summary(app_state.fuel_rate_library.get(name, {}))
+                rows.append(
+                    {
+                        "Rate": name,
+                        "Energy Source": FUEL_TYPE_LABELS[ft],
+                        "Fixed Charge": parts["fixed"],
+                        "Energy Charges": parts["energy"],
+                        "Demand Charges": parts["demand"],
+                        "Applies To": ", ".join(labels),
+                    }
+                )
+    return rows
+
+
 def render_results_page(app_state: AppState) -> None:
     """Render the results visualization and export page."""
     st.header("Results")
@@ -93,9 +269,13 @@ def render_results_page(app_state: AppState) -> None:
     ds_type = (app_state.dataset_type or "").lower()
     is_comstock = ds_type == "comstock"
 
-    # Whole-building dollars use $.0f; ComStock $/ft² uses $.2f.
-    dollar_fmt = "$.0f"
-    per_sqft_fmt = "$.2f"
+    # Whole-building dollars get no decimals; ComStock $/ft² gets two.
+    # Altair charts take D3 format strings; st.column_config.NumberColumn
+    # takes printf-style strings (a D3 string would render literally).
+    dollar_fmt = "$.0f"  # charts
+    per_sqft_fmt = "$.2f"  # charts
+    table_dollar_fmt = "$%.0f"  # tables
+    table_per_sqft_fmt = "$%.2f"  # tables
 
     # ── Energy source selection ───────────────────────────────────────────────
     # The selected sources drive every statistic on the page: summary
@@ -180,13 +360,13 @@ def render_results_page(app_state: AppState) -> None:
             for col in display_cols:
                 if col in per_sqft_cols:
                     column_config[col] = st.column_config.NumberColumn(
-                        format=per_sqft_fmt
+                        format=table_per_sqft_fmt
                     )
                 elif col in non_dollar_cols:
                     continue
                 else:
                     column_config[col] = st.column_config.NumberColumn(
-                        format=dollar_fmt
+                        format=table_dollar_fmt
                     )
             st.dataframe(
                 summary.select(display_cols).to_pandas(),
@@ -246,7 +426,7 @@ def render_results_page(app_state: AppState) -> None:
             )
             if total_col in summary.columns:
                 breakdown_map[total_col] = "Total Energy"
-            breakdown_fmt = per_sqft_fmt if is_comstock else dollar_fmt
+            breakdown_fmt = table_per_sqft_fmt if is_comstock else table_dollar_fmt
             unit_note = "$/ft²" if is_comstock else "$ per building"
             st.caption(f"Mean annual bill by energy source ({unit_note}).")
             breakdown = summary.select(["scenario"] + list(breakdown_map)).rename(
@@ -261,19 +441,34 @@ def render_results_page(app_state: AppState) -> None:
                     for label in breakdown_map.values()
                 },
             )
-
-            # Rate names applied (if available)
-            rate_name_cols = [c for c in df.columns if c.endswith("_rate_name")]
-            if rate_name_cols:
-                st.caption("Rates applied to fuel bills:")
-                sample = (
-                    df.select(["upgrade"] + rate_name_cols)
-                    .unique(subset=["upgrade"])
-                    .sort("upgrade")
-                )
-                st.dataframe(sample.to_pandas(), hide_index=True)
         except Exception as exc:
             st.error(f"Fuel breakdown error: {exc}")
+
+    # ── Configured rates ──────────────────────────────────────────────────────
+    st.divider()
+    st.subheader("Configured Rates")
+    try:
+        _upgrade_ids = sorted(df["upgrade"].unique().to_list())
+        rate_rows = _build_rates_summary_rows(
+            app_state,
+            upgrade_ids=_upgrade_ids,
+            base_uri=_base_uri,
+            result_columns=set(df.columns),
+        )
+        if rate_rows:
+            st.caption(
+                "Rates assigned on the Rates tab, with their charge components "
+                "and the scenarios they apply to."
+            )
+            st.dataframe(
+                pl.DataFrame(rate_rows).to_pandas(),
+                width="stretch",
+                hide_index=True,
+            )
+        else:
+            st.caption("No rates are assigned to the scenarios in these results.")
+    except Exception as exc:
+        st.error(f"Rate summary error: {exc}")
 
     st.divider()
 
@@ -347,7 +542,8 @@ def render_results_page(app_state: AppState) -> None:
                 and "bill_savings_per_sqft" in diff_df.columns
             )
             savings_col = "bill_savings_per_sqft" if use_per_sqft else "bill_savings"
-            display_fmt = per_sqft_fmt if use_per_sqft else dollar_fmt
+            display_fmt = per_sqft_fmt if use_per_sqft else dollar_fmt  # charts
+            table_display_fmt = table_per_sqft_fmt if use_per_sqft else table_dollar_fmt
 
             if savings_view == "Average":
                 value_label = (
@@ -394,7 +590,7 @@ def render_results_page(app_state: AppState) -> None:
 
             # Render with $ formatting on the savings column.
             sav_column_config: dict[str, st.column_config.Column] = {
-                value_label: st.column_config.NumberColumn(format=display_fmt),
+                value_label: st.column_config.NumberColumn(format=table_display_fmt),
             }
             if savings_view == "Average":
                 med_label = (
@@ -403,7 +599,7 @@ def render_results_page(app_state: AppState) -> None:
                     else "median_bill_savings"
                 )
                 sav_column_config[med_label] = st.column_config.NumberColumn(
-                    format=display_fmt
+                    format=table_display_fmt
                 )
             st.dataframe(
                 diff_summary.to_pandas(),

@@ -81,32 +81,45 @@ class DatasetConfig:
     # Building characteristic columns shown as filter dropdowns on the Building
     # Filters page. Geographic columns (state/county/puma) are handled separately.
     filter_columns: Optional[List[str]] = None
-    # Sub-state geographic metadata trees (ComStock aggregates). The ComStock
-    # national aggregate deduplicates building instances to state level only, so
-    # county/PUMA selections must load the by_state_and_county / by_state_and_puma
-    # files instead. Maps geo level ('county' | 'puma') to a path under base_uri.
+    # Sub-state geographic metadata trees. ComStock metadata is only usable
+    # from the non-aggregate by_state_and_county files (per-row weights valid
+    # for bill calculations). Maps geo level ('county' | 'puma') to a path
+    # under base_uri.
     geo_metadata_paths: Optional[Dict[str, str]] = None
+    # True when the dataset has no usable national metadata file: every load
+    # must resolve to per-geometry files, and whole-state selections are
+    # expanded to all counties in those states (ComStock).
+    requires_geo_selection: bool = False
     # Filename template for sub-state metadata files, formatted with
     # {state} (USPS abbr), {level} ('county'/'puma'), {geo_id} (GISJOIN), {token}
     geo_filename: str = (
         "state={state}/{level}={geo_id}/{state}_{geo_id}_{token}.parquet"
     )
-    # Per-level overrides of geo_filename. Needed because ComStock county
-    # metadata comes from the non-aggregate tree (no "_agg" suffix) while PUMA
-    # metadata only exists in the aggregates tree ("_agg" suffix).
-    geo_filenames: Optional[Dict[str, str]] = None
     geo_baseline_token: str = ""  # e.g. "upgrade0" or "baseline"
     geo_upgrade_token: str = (
         ""  # e.g. "upgrade{upgrade_id}" or "upgrade{upgrade_id:02d}"
     )
-    # Renames applied on load so geographic columns have canonical names
     # (e.g. {"in.nhgis_county_gisjoin": "in.county"})
     geo_column_renames: Optional[Dict[str, str]] = None
+    # Per-building floor-area column (ft²). Combined with ``weight`` this gives
+    # the weighted real-world area a metadata row represents; used to drop rows
+    # whose weighted area is unrealistically small (see MIN_WEIGHTED_AREA_SQFT).
+    # None for datasets (ResStock) where per-row weighted-area filtering does
+    # not apply.
+    floor_area_column: Optional[str] = None
 
 
 # OEDI public bucket — HTTPS base used in DATASET_CONFIGS, S3 base for native access
 _OEDI_HTTPS_BASE = "https://oedi-data-lake.s3.amazonaws.com/"
 _OEDI_S3_BASE = "s3://oedi-data-lake/"
+
+# Minimum weighted real-world floor area (``weight × floor_area_column``, in
+# ft²) a ComStock metadata row must represent to be included in results. Rows
+# below this threshold come from very small sample weights and yield
+# unrealistically tiny buildings and inflated cost-per-ft² values (rows exactly
+# at the threshold are kept). Adjust here to change the cutoff for every
+# ComStock run.
+MIN_WEIGHTED_AREA_SQFT: float = 333.0
 
 # Two-digit state FIPS code → USPS abbreviation (used to resolve the state
 # partition for county/PUMA GISJOIN ids, e.g. 'G0200130' → '02' → 'AK')
@@ -259,18 +272,19 @@ class BuildStockDataManager:
             state_column="in.state",
             expected_resolution_minutes=15,
             supported_upgrades=list(range(40)),  # 0-39 for ComStock
-            # National (no county/PUMA selection) falls back to the full
-            # aggregates file — the non-aggregate tree only exists
-            # by_state_and_county. Column projection keeps downloads small.
-            metadata_path="metadata_and_annual_results_aggregates/national/full/parquet",
-            baseline_filename="baseline_agg.parquet",
-            upgrade_filename="upgrade{upgrade_id:02d}_agg.parquet",
+            # No national metadata: aggregate weights are not valid for bill
+            # calculations, so every load resolves to per-county files.
+            metadata_path="",
+            baseline_filename="",
+            upgrade_filename="",
+            requires_geo_selection=True,
             natural_gas_energy_column="out.natural_gas.total.energy_consumption..kwh",
             natural_gas_bill_column="out.utility_bills.natural_gas_bill..usd",
             propane_energy_column="out.propane.total.energy_consumption..kwh",
             propane_bill_column="out.utility_bills.propane_bill..usd",
             fuel_oil_energy_column="out.fuel_oil.total.energy_consumption..kwh",
             fuel_oil_bill_column="out.utility_bills.fuel_oil_bill..usd",
+            floor_area_column="in.sqft..ft2",
             # ComStock 2024 r2 has no propane/fuel-oil energy or default bill columns
             filter_columns=[
                 "in.comstock_building_type",
@@ -281,13 +295,9 @@ class BuildStockDataManager:
                 "in.hvac_system_type",
             ],
             geo_metadata_paths={
-                # County: non-aggregate full metadata (per-row weights, bldg_id
-                # may repeat). PUMA: aggregates only — no non-aggregate tree.
+                # Non-aggregate full metadata only: per-row weights, bldg_id
+                # may repeat. PUMA is intentionally unsupported for ComStock.
                 "county": "metadata_and_annual_results/by_state_and_county/full/parquet",
-                "puma": "metadata_and_annual_results_aggregates/by_state_and_puma/full/parquet",
-            },
-            geo_filenames={
-                "puma": "state={state}/{level}={geo_id}/{state}_{geo_id}_{token}_agg.parquet",
             },
             geo_baseline_token="baseline",
             geo_upgrade_token="upgrade{upgrade_id:02d}",
@@ -305,12 +315,12 @@ class BuildStockDataManager:
             state_column="in.state",
             expected_resolution_minutes=15,
             supported_upgrades=list(range(40)),  # 0-39 for ComStock
-            # National (no county/PUMA selection) falls back to the full
-            # aggregates file — the non-aggregate tree only exists
-            # by_state_and_county. Column projection keeps downloads small.
-            metadata_path="metadata_and_annual_results_aggregates/national/full/parquet",
-            baseline_filename="upgrade0_agg.parquet",
-            upgrade_filename="upgrade{upgrade_id}_agg.parquet",
+            # No national metadata: aggregate weights are not valid for bill
+            # calculations, so every load resolves to per-county files.
+            metadata_path="",
+            baseline_filename="",
+            upgrade_filename="",
+            requires_geo_selection=True,
             natural_gas_energy_column="out.natural_gas.total.energy_consumption..kwh",
             natural_gas_bill_column="calc.weighted.utility_bills.natural_gas_bill_state_average..billion_usd",
             propane_energy_column="out.propane.total.energy_consumption..kwh",
@@ -318,6 +328,7 @@ class BuildStockDataManager:
             fuel_oil_energy_column="out.fuel_oil.total.energy_consumption..kwh",
             fuel_oil_bill_column="calc.weighted.utility_bills.fuel_oil_bill_state_average..billion_usd",
             electricity_bill_column="out.utility_bills.electricity_bill_mean..usd",
+            floor_area_column="in.sqft..ft2",
             filter_columns=[
                 "in.comstock_building_type",
                 "in.heating_fuel",
@@ -327,13 +338,9 @@ class BuildStockDataManager:
                 "in.hvac_system_type",
             ],
             geo_metadata_paths={
-                # County: non-aggregate full metadata (per-row weights, bldg_id
-                # may repeat). PUMA: aggregates only — no non-aggregate tree.
+                # Non-aggregate full metadata only: per-row weights, bldg_id
+                # may repeat. PUMA is intentionally unsupported for ComStock.
                 "county": "metadata_and_annual_results/by_state_and_county/full/parquet",
-                "puma": "metadata_and_annual_results_aggregates/by_state_and_puma/full/parquet",
-            },
-            geo_filenames={
-                "puma": "state={state}/{level}={geo_id}/{state}_{geo_id}_{token}_agg.parquet",
             },
             geo_baseline_token="upgrade0",
             geo_upgrade_token="upgrade{upgrade_id}",
@@ -451,7 +458,14 @@ class BuildStockDataManager:
         return https_uri.replace(_OEDI_HTTPS_BASE, _OEDI_S3_BASE)
 
     def _get_default_metadata_uri(self) -> str:
-        """Get default metadata URI based on dataset configuration."""
+        """Get default metadata URI based on dataset configuration.
+
+        Returns an empty string for datasets without a national metadata file
+        (``requires_geo_selection``); all loads for those datasets go through
+        :meth:`metadata_uris_for_upgrade` with a geographic selection.
+        """
+        if not self.config.metadata_path:
+            return ""
         uri = (
             f"{self.config.base_uri}/{self.config.metadata_path}"
             f"/{self.config.baseline_filename}"
@@ -459,14 +473,23 @@ class BuildStockDataManager:
         return self._to_s3_uri(uri)
 
     def get_metadata_uri_for_upgrade(self, upgrade_id: int) -> str:
-        """Return the metadata URI for a specific upgrade.
+        """Return the national metadata URI for a specific upgrade.
 
         Args:
             upgrade_id: Upgrade index (0 = baseline).
 
         Returns:
             String URI pointing to the upgrade's metadata/annual-results file.
+
+        Raises:
+            RuntimeError: If the dataset has no national metadata file
+                (``requires_geo_selection``, e.g. ComStock).
         """
+        if not self.config.metadata_path and not self.metadata_uri:
+            raise RuntimeError(
+                f"{self.dataset_type} {self.release} has no national metadata "
+                "file — a state or county selection is required."
+            )
         if upgrade_id == 0:
             return self.metadata_uri
         filename = self.config.upgrade_filename.format(upgrade_id=upgrade_id)
@@ -517,11 +540,18 @@ class BuildStockDataManager:
             )
 
     def uses_geo_metadata(self) -> bool:
-        """True when county/PUMA selections require per-geometry metadata files."""
-        return bool(
-            self.config.geo_metadata_paths
-            and (self.selected_county_ids or self.selected_puma_ids)
-        )
+        """True when the current selection requires per-geometry metadata files.
+
+        County/PUMA selections always do. For datasets without a national
+        metadata file (``requires_geo_selection``, e.g. ComStock), a
+        states-only selection also does — it is expanded to all counties in
+        those states at URI-construction time.
+        """
+        if not self.config.geo_metadata_paths:
+            return False
+        if self.selected_county_ids or self.selected_puma_ids:
+            return True
+        return self.config.requires_geo_selection and bool(self.selected_states)
 
     def metadata_uris_for_upgrade(self, upgrade_id: int) -> List[str]:
         """Return the list of metadata file URIs appropriate for the current
@@ -529,9 +559,36 @@ class BuildStockDataManager:
 
         Datasets without sub-state metadata trees (ResStock — full county/PUMA
         resolution in the national file) always get the single national URI.
+        For ComStock (``requires_geo_selection``), a states-only selection is
+        expanded to every county in those states; with no geographic selection
+        at all a :class:`RuntimeError` is raised.
+
+        Raises:
+            RuntimeError: When the dataset requires a geographic selection and
+                none is active.
         """
         if not self.uses_geo_metadata():
+            if self.config.requires_geo_selection:
+                raise RuntimeError(
+                    f"{self.dataset_type} {self.release} metadata is only "
+                    "available per county — select states or counties before "
+                    "loading metadata."
+                )
             return [self.get_metadata_uri_for_upgrade(upgrade_id)]
+
+        # Sub-state county selections win over states (matching
+        # AppState.apply_geo_filter); states-only expands to all counties.
+        county_ids = list(self.selected_county_ids)
+        if not county_ids and self.config.requires_geo_selection:
+            from buildstock_rate_impact_calculator.data.geo_utils import (
+                counties_for_states,
+            )
+
+            county_ids = counties_for_states(self.selected_states)
+            self.logger.info(
+                f"Expanded {len(self.selected_states)} state(s) to "
+                f"{len(county_ids)} county metadata file(s)."
+            )
 
         token = (
             self.config.geo_baseline_token
@@ -540,7 +597,7 @@ class BuildStockDataManager:
         )
         uris: List[str] = []
         for level, geo_ids in (
-            ("county", self.selected_county_ids),
+            ("county", county_ids),
             ("puma", self.selected_puma_ids),
         ):
             path = (self.config.geo_metadata_paths or {}).get(level)
@@ -558,10 +615,7 @@ class BuildStockDataManager:
                         f"Cannot determine state for {level} id '{geo_id}'; skipping."
                     )
                     continue
-                template = (self.config.geo_filenames or {}).get(
-                    level, self.config.geo_filename
-                )
-                rel = template.format(
+                rel = self.config.geo_filename.format(
                     state=state, level=level, geo_id=geo_id, token=token
                 )
                 uris.append(self._to_s3_uri(f"{self.config.base_uri}/{path}/{rel}"))
@@ -575,13 +629,22 @@ class BuildStockDataManager:
         is identical across every row. ComStock varies its weight per building,
         so the per-row value is used downstream instead.
 
-        For ResStock the value is fetched lazily on first call by scanning the
-        baseline metadata Parquet and reading row 0 of the ``weight`` column,
-        then cached on the instance for the remainder of its lifetime.
+        For ResStock the value is read from the already-loaded metadata when
+        available (the ``weight`` column is part of the app column set), and
+        only falls back to a remote scan of the baseline Parquet when no
+        metadata has been loaded yet. Cached on the instance either way.
         """
         if self.dataset_type != "resstock":
             return None
         if self._dataset_weight is not None:
+            return self._dataset_weight
+
+        if (
+            self._metadata is not None
+            and "weight" in self._metadata.columns
+            and self._metadata.height > 0
+        ):
+            self._dataset_weight = float(self._metadata["weight"][0])
             return self._dataset_weight
 
         uris = self.metadata_uris_for_upgrade(0)
@@ -1268,9 +1331,14 @@ class BuildStockDataManager:
             return {bid: True for bid in building_ids}
 
         bldg_col = self.config.building_id_column
+        # Column set used by load_metadata / load_upgrade_metadata — when that
+        # projected cache file already exists locally, read applicability from
+        # it instead of re-scanning the remote Parquet.
+        app_cols = self._deduplicate_columns(self.get_app_metadata_columns())
 
-        def _fetch_applicable_ids(uri: str) -> Set[Any]:
-            lf = pl.scan_parquet(uri, storage_options=self._S3_ANON)
+        def _applicable_ids_from_lazyframe(lf: "pl.LazyFrame") -> Optional[Set[Any]]:
+            """Extract applicable bldg ids via the ``applicability`` column;
+            None when the column is absent."""
             schema = lf.collect_schema()
             if schema.get("applicability") == pl.Boolean:
                 df = lf.filter(pl.col("applicability")).select(bldg_col).collect()
@@ -1284,13 +1352,25 @@ class BuildStockDataManager:
                     .collect()
                 )
             else:
-                df = (
-                    lf.filter(
-                        pl.any_horizontal(cs.starts_with("upgrade.").is_not_null())
-                    )
-                    .select(bldg_col)
-                    .collect()
-                )
+                return None
+            return set(df.to_series().to_list())
+
+        def _fetch_applicable_ids(uri: str) -> Set[Any]:
+            if self.cache_enabled:
+                local_cache = self._metadata_cache_path(uri, app_cols)
+                if local_cache.exists():
+                    ids = _applicable_ids_from_lazyframe(pl.scan_parquet(local_cache))
+                    if ids is not None:
+                        return ids
+            lf = pl.scan_parquet(uri, storage_options=self._S3_ANON)
+            ids = _applicable_ids_from_lazyframe(lf)
+            if ids is not None:
+                return ids
+            df = (
+                lf.filter(pl.any_horizontal(cs.starts_with("upgrade.").is_not_null()))
+                .select(bldg_col)
+                .collect()
+            )
             return set(df.to_series().to_list())
 
         try:
@@ -1343,6 +1423,47 @@ class BuildStockDataManager:
             upgrades = [0]
         BYTES_PER_BUILDING_PER_UPGRADE = 90_000  # ~90 KB empirical average
         return len(building_ids) * len(upgrades) * BYTES_PER_BUILDING_PER_UPGRADE
+
+    # Empirical average network transfer per column-projected metadata fetch.
+    # Geo files: measured projected county fetches (2025 r3 full metadata,
+    # ~20 app columns) ranged from ~10 KB (rural) to ~500 KB (Denver); the
+    # constant is padded for schema/footer overhead of the ~1,400-column
+    # source files. The national constant covers ResStock's single large file.
+    _METADATA_BYTES_PER_GEO_FILE = 750_000
+    _METADATA_BYTES_PER_NATIONAL_FILE = 25_000_000
+
+    def estimate_metadata_download_size(
+        self, upgrades: Optional[List[int]] = None
+    ) -> int:
+        """
+        Estimate the metadata download size in bytes for the current
+        geographic selection and the given upgrade scenarios.
+
+        Metadata is fetched once per file for the baseline plus once per
+        non-baseline upgrade (fuel / default-bill columns), then cached on
+        disk — the estimate covers the first, uncached load.
+
+        Args:
+            upgrades: Upgrade scenario IDs (baseline is always included).
+
+        Returns:
+            Estimated total size in bytes; 0 when no metadata files resolve
+            from the current selection.
+        """
+        scenarios = set(upgrades or []) | {0}
+        try:
+            n_files = len(self.metadata_uris_for_upgrade(0))
+        except RuntimeError:
+            # Dataset requires a geographic selection and none is active.
+            return 0
+        if n_files == 0:
+            return 0
+        per_file = (
+            self._METADATA_BYTES_PER_GEO_FILE
+            if self.uses_geo_metadata()
+            else self._METADATA_BYTES_PER_NATIONAL_FILE
+        )
+        return n_files * len(scenarios) * per_file
 
     def get_available_filter_columns(self, metadata_df: pl.DataFrame) -> List[str]:
         """
@@ -1427,6 +1548,73 @@ class BuildStockDataManager:
             else:
                 result = result.filter(pl.col(column) == value)
         return result
+
+    def filter_min_weighted_area(
+        self,
+        metadata_df: pl.DataFrame,
+        min_weighted_area: Optional[float] = None,
+    ) -> pl.DataFrame:
+        """Drop metadata rows whose weighted floor area is too small.
+
+        A ComStock row's weighted real-world area is ``weight × floor_area``.
+        When ``weight`` is very small the row represents an unrealistically
+        tiny building, which inflates cost-per-ft² statistics. Rows below
+        ``min_weighted_area`` (default :data:`MIN_WEIGHTED_AREA_SQFT`) are
+        removed. The number of rows dropped, the share of rows they were, and
+        the share of total weighted area they represented are logged.
+
+        This is a no-op (returns the frame unchanged) for datasets without a
+        configured ``floor_area_column`` (e.g. ResStock), or when the
+        ``weight`` / floor-area columns are absent from the frame.
+
+        Args:
+            metadata_df: Loaded metadata DataFrame.
+            min_weighted_area: Threshold in ft² (weighted). Rows with weighted
+                area greater than or equal to this are kept. Defaults to
+                :data:`MIN_WEIGHTED_AREA_SQFT`.
+
+        Returns:
+            The filtered DataFrame (or the original if filtering does not apply).
+        """
+        area_col = self.config.floor_area_column
+        threshold = (
+            MIN_WEIGHTED_AREA_SQFT if min_weighted_area is None else min_weighted_area
+        )
+        if not area_col or area_col not in metadata_df.columns:
+            return metadata_df
+        if "weight" not in metadata_df.columns:
+            return metadata_df
+
+        weighted_area = pl.col("weight").cast(pl.Float64) * pl.col(area_col).cast(
+            pl.Float64
+        )
+        annotated = metadata_df.with_columns(weighted_area.alias("_weighted_area_sqft"))
+        total_rows = annotated.height
+        if total_rows == 0:
+            return metadata_df
+
+        keep_mask = pl.col("_weighted_area_sqft") >= threshold
+        kept = annotated.filter(keep_mask)
+        dropped_rows = total_rows - kept.height
+
+        if dropped_rows == 0:
+            self.logger.info(
+                f"Weighted-area filter (≥ {threshold:g} ft²): no rows dropped "
+                f"({total_rows:,} rows)."
+            )
+            return metadata_df
+
+        total_area = annotated["_weighted_area_sqft"].sum() or 0.0
+        dropped_area = annotated.filter(~keep_mask)["_weighted_area_sqft"].sum() or 0.0
+        pct_rows = 100.0 * dropped_rows / total_rows
+        pct_area = (100.0 * dropped_area / total_area) if total_area > 0 else 0.0
+        self.logger.info(
+            f"Weighted-area filter (≥ {threshold:g} ft²): dropped "
+            f"{dropped_rows:,} of {total_rows:,} rows ({pct_rows:.2f}%), "
+            f"representing {pct_area:.2f}% of total weighted floor area."
+        )
+
+        return kept.drop("_weighted_area_sqft")
 
     def is_numeric_column(self, metadata_df: pl.DataFrame, column: str) -> bool:
         """
@@ -1646,15 +1834,35 @@ class BuildStockDataManager:
             Only contains entries for files that exist on disk.
         """
         output_dir = Path(output_dir)
+        pairs = [
+            (building_id, upgrade)
+            for building_id in building_ids
+            for upgrade in upgrades
+            if (output_dir / f"{building_id}_{upgrade}.parquet").exists()
+        ]
+        if not pairs:
+            return {}
+
+        def _read_one(building_id: Any, upgrade: int) -> Optional[pl.DataFrame]:
+            path = output_dir / f"{building_id}_{upgrade}.parquet"
+            try:
+                return pl.read_parquet(path)
+            except Exception as exc:
+                self.logger.warning(f"Could not read cached file {path}: {exc}")
+                return None
+
         results: Dict[str, pl.DataFrame] = {}
-        for building_id in building_ids:
-            for upgrade in upgrades:
-                path = output_dir / f"{building_id}_{upgrade}.parquet"
-                if path.exists():
-                    try:
-                        results[f"{building_id}_{upgrade}"] = pl.read_parquet(path)
-                    except Exception as exc:
-                        self.logger.warning(f"Could not read cached file {path}: {exc}")
+        with ThreadPoolExecutor(
+            max_workers=min(self.max_workers, len(pairs))
+        ) as executor:
+            futures = {
+                executor.submit(_read_one, bid, upg): (bid, upg) for bid, upg in pairs
+            }
+            for future in as_completed(futures):
+                bid, upg = futures[future]
+                df = future.result()
+                if df is not None:
+                    results[f"{bid}_{upg}"] = df
         return results
 
     def load_cached_monthly_fuel(

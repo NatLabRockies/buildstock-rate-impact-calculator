@@ -345,6 +345,9 @@ def render_map_selector(
             "selected_puma_ids": initial_puma_ids,
         }
 
+    # PUMA selection is not supported for ComStock (county-only metadata).
+    allow_puma = (dataset_type or "").lower() != "comstock"
+
     # ── Initialise session state ──────────────────────────────────────────────
     if "_map_view_mode" not in st.session_state:
         st.session_state["_map_view_mode"] = "state"
@@ -353,10 +356,14 @@ def render_map_selector(
     if "_map_puma_sel" not in st.session_state:
         st.session_state["_map_puma_sel"] = set(initial_puma_ids)
 
+    if not allow_puma and st.session_state["_map_view_mode"] == "puma":
+        # e.g. dataset switched to ComStock while the PUMA view was open
+        st.session_state["_map_view_mode"] = "state"
+
     mode = st.session_state["_map_view_mode"]
 
     if mode == "state":
-        _render_state_selection_view(initial_states)
+        _render_state_selection_view(initial_states, allow_puma)
         selected_states = st.session_state.get("_map_selected_states", initial_states)
         return {
             "selected_states": selected_states,
@@ -378,7 +385,9 @@ def render_map_selector(
 
 
 @st.fragment
-def _render_state_selection_view(current_states: list[str]) -> None:
+def _render_state_selection_view(
+    current_states: list[str], allow_puma: bool = True
+) -> None:
     """Render the national state choropleth with click-to-toggle selection."""
 
     sel_key = "_map_states_sel"
@@ -508,16 +517,24 @@ def _render_state_selection_view(current_states: list[str]) -> None:
     # Persist for sub-level views
     st.session_state["_map_selected_states"] = chosen
 
-    # Drill-down buttons (visible only when at least one state is selected)
+    # Drill-down buttons (visible only when at least one state is selected).
+    # ComStock offers counties only — its metadata has no PUMA resolution.
     if chosen:
-        col1, col2 = st.columns(2)
-        with col1:
+        if allow_puma:
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button(
+                    "Select Counties", width="stretch", key="btn_select_counties"
+                ):
+                    st.session_state["_map_view_mode"] = "county"
+                    st.rerun(scope="app")
+            with col2:
+                if st.button("Select PUMAs", width="stretch", key="btn_select_pumas"):
+                    st.session_state["_map_view_mode"] = "puma"
+                    st.rerun(scope="app")
+        else:
             if st.button("Select Counties", width="stretch", key="btn_select_counties"):
                 st.session_state["_map_view_mode"] = "county"
-                st.rerun(scope="app")
-        with col2:
-            if st.button("Select PUMAs", width="stretch", key="btn_select_pumas"):
-                st.session_state["_map_view_mode"] = "puma"
                 st.rerun(scope="app")
 
     # Show existing sub-level selection counts as a reminder
