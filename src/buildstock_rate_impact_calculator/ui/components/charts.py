@@ -141,6 +141,52 @@ def render_bill_distribution(
     return box.interactive()
 
 
+def render_monthly_profile(
+    long_df: pl.DataFrame,
+    value_col: str = "value",
+    value_format: str = "$.0f",
+    y_axis_title: str = "Mean Monthly Bill ($)",
+    scenario_col: str = "scenario",
+    chart_title: str = "Mean Monthly Bill by Scenario",
+) -> alt.Chart:
+    """Render a per-scenario line chart of mean monthly bills.
+
+    Args:
+        long_df: Long-form frame from ``monthly_bills_long`` with ``month``
+            (1–12), the value column, and a scenario label column.
+        value_col: Numeric column plotted on the y-axis.
+        value_format: D3 numeric format for tooltips / axis labels.
+        y_axis_title: Y-axis label.
+        scenario_col: Column holding the scenario label (used for color).
+        chart_title: Chart title text.
+
+    Returns:
+        Altair Chart object.
+    """
+    pandas_df = long_df.to_pandas()
+
+    line = (
+        alt.Chart(pandas_df)
+        .mark_line(point=True)
+        .encode(
+            x=alt.X("month:O", title="Month"),
+            y=alt.Y(
+                f"{value_col}:Q",
+                title=y_axis_title,
+                axis=alt.Axis(format=value_format),
+            ),
+            color=alt.Color(f"{scenario_col}:N", title="Scenario"),
+            tooltip=[
+                alt.Tooltip(f"{scenario_col}:N", title="Scenario"),
+                alt.Tooltip("month:O", title="Month"),
+                alt.Tooltip(f"{value_col}:Q", title=y_axis_title, format=value_format),
+            ],
+        )
+    )
+
+    return line.properties(title=chart_title, width=600, height=350).interactive()
+
+
 def melt_fuels_to_long(
     summary_df: pl.DataFrame,
     fuel_columns: Mapping[str, str],
@@ -188,6 +234,7 @@ def render_bill_stack_bar(
     value_format: str = "$.0f",
     y_axis_title: Optional[str] = None,
     chart_title: str = "Bill Composition by Fuel",
+    legend_title: str = "Fuel",
 ) -> alt.Chart:
     """Render a stacked bar chart of bill amounts by scenario × fuel type.
 
@@ -220,10 +267,10 @@ def render_bill_stack_bar(
             title=y_axis_title,
             axis=alt.Axis(format=value_format),
         ),
-        "color": alt.Color(f"{fuel_col}:N", title="Fuel"),
+        "color": alt.Color(f"{fuel_col}:N", title=legend_title),
         "tooltip": [
             alt.Tooltip(f"{scenario_col}:N", title="Scenario"),
-            alt.Tooltip(f"{fuel_col}:N", title="Fuel"),
+            alt.Tooltip(f"{fuel_col}:N", title=legend_title),
             alt.Tooltip(f"{value_col}:Q", title=y_axis_title, format=value_format),
         ],
     }

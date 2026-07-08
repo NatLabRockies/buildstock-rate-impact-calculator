@@ -27,6 +27,7 @@ from buildstock_rate_impact_calculator.billing.results import (
     add_cost_per_sqft,
     bill_source_options,
     compute_bill_savings,
+    monthly_bills_long,
     summarize_bills,
     with_selected_bill,
 )
@@ -338,6 +339,75 @@ class TestSummarizeBillsGroupByList:
         df = _resstock_df()
         with pytest.raises(ValueError, match="not found"):
             summarize_bills(df, dataset_type="resstock", group_by=["nope"])
+
+
+# ---------------------------------------------------------------------------
+# monthly_bills_long (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+class TestMonthlyBillsLong:
+    def test_resstock_plain_mean(self) -> None:
+        df = _resstock_df().with_columns(
+            pl.Series(
+                "monthly_bills",
+                [
+                    str([100.0] * 12),
+                    str([200.0] * 12),
+                    str([80.0] * 12),
+                    str([150.0] * 12),
+                ],
+            )
+        )
+        long = monthly_bills_long(df, per_sqft=False)
+        assert long.height == 24  # 2 upgrades × 12 months
+        base = long.filter(pl.col("upgrade") == 0).sort("month")
+        assert base["month"].to_list() == list(range(1, 13))
+        # Mean of (100, 200) per month = 150
+        assert all(v == pytest.approx(150.0) for v in base["value"].to_list())
+
+    def test_comstock_per_sqft(self) -> None:
+        # Weighted monthly bills: bldg 1 = 50000/12 per month, bldg 2 =
+        # 160000/12 → per-sqft 5/12 and 4/12 → mean 4.5/12 per month.
+        df = _comstock_df().with_columns(
+            pl.Series(
+                "monthly_bills",
+                [
+                    str([50_000.0 / 12] * 12),
+                    str([160_000.0 / 12] * 12),
+                    str([40_000.0 / 12] * 12),
+                    str([120_000.0 / 12] * 12),
+                ],
+            )
+        )
+        long = monthly_bills_long(df, per_sqft=True)
+        base = long.filter(pl.col("upgrade") == 0)
+        assert all(v == pytest.approx(4.5 / 12) for v in base["value"].to_list())
+
+    def test_null_rows_skipped(self) -> None:
+        df = _resstock_df().with_columns(
+            pl.Series(
+                "monthly_bills",
+                [str([100.0] * 12), None, str([80.0] * 12), None],
+            )
+        )
+        long = monthly_bills_long(df, per_sqft=False)
+        base = long.filter(pl.col("upgrade") == 0)
+        # Only bldg 1 contributed
+        assert all(v == pytest.approx(100.0) for v in base["value"].to_list())
+
+    def test_missing_column_returns_empty(self) -> None:
+        long = monthly_bills_long(_resstock_df(), per_sqft=False)
+        assert long.height == 0
+
+    def test_scenario_column_carried_through(self) -> None:
+        df = _resstock_df().with_columns(
+            pl.Series("monthly_bills", [str([100.0] * 12)] * 4),
+            pl.Series("scenario", ["Baseline", "Baseline", "Up 1", "Up 1"]),
+        )
+        long = monthly_bills_long(df, per_sqft=False)
+        assert "scenario" in long.columns
+        assert set(long["scenario"].to_list()) == {"Baseline", "Up 1"}
 
 
 # ---------------------------------------------------------------------------

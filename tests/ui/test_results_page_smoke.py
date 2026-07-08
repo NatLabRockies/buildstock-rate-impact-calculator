@@ -27,6 +27,17 @@ def _comstock_results_df() -> pl.DataFrame:
             "_row_uid": ["1_a", "2_a", "1_a", "2_a"],
             "applicable": [True, True, True, False],
             "error": [None, None, None, None],
+            "monthly_bills": [
+                str([50_000.0 / 12] * 12),
+                str([160_000.0 / 12] * 12),
+                str([40_000.0 / 12] * 12),
+                str([120_000.0 / 12] * 12),
+            ],
+            "annual_fixed_charge": [600.0, 1_200.0, 600.0, 1_200.0],
+            "annual_energy_charge": [39_400.0, 118_800.0, 31_400.0, 88_800.0],
+            "annual_demand_charge": [10_000.0, 40_000.0, 8_000.0, 30_000.0],
+            "annual_min_charge": [0.0, 0.0, 0.0, 0.0],
+            "peak_demand_kw": [50.0, 160.0, 40.0, 120.0],
         }
     )
 
@@ -44,6 +55,17 @@ def _resstock_results_df() -> pl.DataFrame:
             "_row_uid": ["1", "2", "1", "2"],
             "applicable": [True, True, True, True],
             "error": [None, None, None, None],
+            "monthly_bills": [
+                str([1000.0 / 12] * 12),
+                str([2000.0 / 12] * 12),
+                str([800.0 / 12] * 12),
+                str([1500.0 / 12] * 12),
+            ],
+            "annual_fixed_charge": [60.0, 60.0, 60.0, 60.0],
+            "annual_energy_charge": [900.0, 1900.0, 700.0, 1400.0],
+            "annual_demand_charge": [40.0, 40.0, 40.0, 40.0],
+            "annual_min_charge": [0.0, 0.0, 0.0, 0.0],
+            "peak_demand_kw": [3.0, 5.0, 2.0, 4.0],
         }
     )
 
@@ -133,6 +155,27 @@ class TestComStockResultsPage:
         assert not at.exception
         assert len(at.error) == 0
 
+    def test_bill_summary_radio_has_component_option(
+        self, comstock_page: AppTest
+    ) -> None:
+        options = comstock_page.radio(key="bill_summary_view").options
+        assert "By charge component" in options
+
+    def test_by_charge_component_view_renders(self, comstock_page: AppTest) -> None:
+        at = comstock_page
+        at.radio(key="bill_summary_view").set_value("By charge component")
+        at.run()
+        assert not at.exception
+        assert len(at.error) == 0
+
+    def test_monthly_profile_section_present(self, comstock_page: AppTest) -> None:
+        subheaders = [s.value for s in comstock_page.subheader]
+        assert "Monthly Bill Profile" in subheaders
+
+    def test_peak_demand_section_present(self, comstock_page: AppTest) -> None:
+        subheaders = [s.value for s in comstock_page.subheader]
+        assert "Peak Demand" in subheaders
+
     def test_total_savings_view_renders(self, comstock_page: AppTest) -> None:
         at = comstock_page
         at.radio(key="bill_savings_view").set_value("Total")
@@ -168,3 +211,17 @@ class TestResStockResultsPage:
         at.run()
         assert not at.exception
         assert len(at.error) == 0
+
+    def test_by_charge_component_view_renders(self, resstock_page: AppTest) -> None:
+        at = resstock_page
+        at.radio(key="bill_summary_view").set_value("By charge component")
+        at.run()
+        assert not at.exception
+        assert len(at.error) == 0
+
+    def test_monthly_profile_and_peak_sections_present(
+        self, resstock_page: AppTest
+    ) -> None:
+        subheaders = [s.value for s in resstock_page.subheader]
+        assert "Monthly Bill Profile" in subheaders
+        assert "Peak Demand" in subheaders

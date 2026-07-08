@@ -23,6 +23,7 @@ from buildstock_rate_impact_calculator.ui.components.charts import (
     melt_fuels_to_long,
     render_bill_comparison_bar,
     render_bill_stack_bar,
+    render_monthly_profile,
 )
 
 
@@ -194,6 +195,42 @@ class TestRenderBillComparisonBarFormats:
         formats = [t.get("format") for t in tooltip if t.get("format")]
         _ = y_enc  # noqa: F841 — keep the inspection for documentation
         assert "$.0f" in formats
+
+
+# ---------------------------------------------------------------------------
+# render_monthly_profile (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+class TestRenderMonthlyProfile:
+    def _long_df(self) -> pl.DataFrame:
+        return pl.DataFrame(
+            {
+                "scenario": ["Baseline"] * 12 + ["Upgrade 1"] * 12,
+                "month": list(range(1, 13)) * 2,
+                "value": [100.0] * 12 + [80.0] * 12,
+            }
+        )
+
+    def test_line_mark_with_month_ordinal_x(self) -> None:
+        spec = render_monthly_profile(self._long_df()).to_dict()
+        x_enc = spec["encoding"]["x"]
+        assert x_enc["field"] == "month"
+        assert x_enc["type"] == "ordinal"
+
+    def test_color_encodes_scenario(self) -> None:
+        spec = render_monthly_profile(self._long_df()).to_dict()
+        assert spec["encoding"]["color"]["field"] == "scenario"
+
+    def test_value_format_wired_to_axis_and_tooltip(self) -> None:
+        spec = render_monthly_profile(
+            self._long_df(), value_format="$.2f", y_axis_title="Bill ($/ft²)"
+        ).to_dict()
+        assert spec["encoding"]["y"]["axis"]["format"] == "$.2f"
+        formats = [
+            t.get("format") for t in spec["encoding"]["tooltip"] if t.get("format")
+        ]
+        assert "$.2f" in formats
 
 
 # ---------------------------------------------------------------------------

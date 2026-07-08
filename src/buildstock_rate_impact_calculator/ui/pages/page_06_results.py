@@ -253,6 +253,7 @@ def render_results_page(app_state: AppState) -> None:
         bill_source_options,
         compute_bill_savings,
         format_for_export,
+        monthly_bills_long,
         summarize_bills,
         with_selected_bill,
     )
@@ -260,6 +261,7 @@ def render_results_page(app_state: AppState) -> None:
         render_bill_comparison_bar,
         render_bill_distribution,
         render_bill_stack_bar,
+        render_monthly_profile,
         melt_fuels_to_long,
     )
 
@@ -308,7 +310,7 @@ def render_results_page(app_state: AppState) -> None:
     st.subheader("Bill Summary")
     bill_summary_view = st.radio(
         "Bill Summary view",
-        ["Total bill", "By fuel"],
+        ["Total bill", "By fuel", "By charge component"],
         horizontal=True,
         key="bill_summary_view",
     )
@@ -374,6 +376,43 @@ def render_results_page(app_state: AppState) -> None:
                 hide_index=True,
                 column_config=column_config,
             )
+        elif bill_summary_view == "By charge component":
+            # Stacked bar of the PySAM electricity-bill decomposition
+            # ($/ft² for ComStock, whole-building $ for ResStock).
+            comp_label_map: dict[str, str] = {}
+            for comp, comp_label in (
+                ("annual_fixed_charge", "Fixed"),
+                ("annual_energy_charge", "Energy"),
+                ("annual_demand_charge", "Demand"),
+                ("annual_min_charge", "Minimum"),
+            ):
+                summary_col = f"mean_{comp}_per_sqft" if is_comstock else f"mean_{comp}"
+                comp_label_map[summary_col] = comp_label
+            comp_fmt = per_sqft_fmt if is_comstock else dollar_fmt
+            long_components = melt_fuels_to_long(summary, comp_label_map)
+            if long_components.height == 0:
+                st.info(
+                    "These results were generated before charge components "
+                    "were tracked — re-run the calculation to see the bill "
+                    "composition."
+                )
+            else:
+                comp_chart = render_bill_stack_bar(
+                    long_components,
+                    value_col="value",
+                    scenario_col="scenario",
+                    fuel_col="fuel_type",
+                    legend_title="Charge Component",
+                    value_format=comp_fmt,
+                    y_axis_title=(
+                        "Mean Electricity Bill ($/ft²)"
+                        if is_comstock
+                        else "Mean Electricity Bill ($)"
+                    ),
+                    chart_title="Mean Electricity Bill by Charge Component",
+                )
+                st.altair_chart(comp_chart, width="stretch")
+            st.caption("Electricity bill only — fuel bills are not decomposed.")
         else:
             # "By fuel": stacked bar of per-source mean bills by scenario
             # ($/ft² for ComStock, whole-building $ for ResStock).
@@ -511,6 +550,33 @@ def render_results_page(app_state: AppState) -> None:
         st.error(f"Distribution chart error: {exc}")
 
     st.divider()
+
+    # ── Monthly bill profile ──────────────────────────────────────────────────
+    if "monthly_bills" in df.columns:
+        st.subheader("Monthly Bill Profile")
+        try:
+            profile = monthly_bills_long(df, per_sqft=is_comstock)
+            if profile.height == 0:
+                st.caption("No monthly bill data available for these results.")
+            else:
+                profile_chart = render_monthly_profile(
+                    profile,
+                    value_col="value",
+                    value_format=per_sqft_fmt if is_comstock else dollar_fmt,
+                    y_axis_title=(
+                        "Mean Monthly Bill ($/ft²)"
+                        if is_comstock
+                        else "Mean Monthly Bill ($)"
+                    ),
+                )
+                st.altair_chart(profile_chart, width="stretch")
+                st.caption(
+                    "Electricity bill only — fuel bills are annual and are "
+                    "not decomposed by month."
+                )
+        except Exception as exc:
+            st.error(f"Monthly profile error: {exc}")
+        st.divider()
 
     # ── Bill savings vs baseline ──────────────────────────────────────────────
     upgrades = sorted(df["upgrade"].unique().to_list())
@@ -658,6 +724,43 @@ def render_results_page(app_state: AppState) -> None:
             st.altair_chart(diff_chart, width="stretch")
         except Exception as exc:
             st.error(f"Bill savings error: {exc}")
+
+    # ── Peak demand ───────────────────────────────────────────────────────────
+    # Rendered only when the run produced peak columns (skipped silently for
+    # older result frames).
+    peak_col = "mean_peak_w_per_sqft" if is_comstock else "mean_peak_demand_kw"
+    if summary is not None and peak_col in summary.columns:
+        st.divider()
+        st.subheader("Peak Demand")
+        try:
+            peak_label = (
+                "Mean Peak Demand (W/ft²)" if is_comstock else "Mean Peak Demand (kW)"
+            )
+            peak_df = summary.select(["scenario", "upgrade", peak_col]).sort("upgrade")
+            if 0 in upgrades:
+                _base_peak = peak_df.filter(pl.col("upgrade") == 0)[peak_col][0]
+                if _base_peak is not None:
+                    peak_df = peak_df.with_columns(
+                        (pl.col(peak_col) - _base_peak).alias("delta_vs_baseline")
+                    )
+            st.caption(
+                "Electricity peak demand from PySAM monthly peaks — "
+                + ("per-building W/ft²." if is_comstock else "kW per dwelling.")
+            )
+            st.dataframe(
+                peak_df.to_pandas(),
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    peak_col: st.column_config.NumberColumn(peak_label, format="%.2f"),
+                    "delta_vs_baseline": st.column_config.NumberColumn(
+                        "Δ vs Baseline", format="%.2f"
+                    ),
+                },
+            )
+        except Exception as exc:
+            st.error(f"Peak demand error: {exc}")
+
     # ── Upgrade vs Baseline Comparison ────────────────────────────────────────
     if "applicable" in df.columns and len(upgrades) > 1 and 0 in upgrades:
         st.divider()

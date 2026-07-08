@@ -341,6 +341,74 @@ def summarize_bills(
     return _summarize_bills_resstock(df, group_keys, bill_expr)
 
 
+def monthly_bills_long(
+    results_df: pl.DataFrame,
+    per_sqft: bool = False,
+) -> pl.DataFrame:
+    """Explode the stringified ``monthly_bills`` column into a long mean frame.
+
+    Each results row carries ``monthly_bills`` as ``str(list_of_12_floats)``
+    (valid JSON). This parses it, explodes to one row per month, and returns
+    the mean bill per ``(upgrade[, scenario], month)``.
+
+    Args:
+        results_df: Results frame with ``upgrade`` and ``monthly_bills``
+            (``scenario`` is carried through when present). Null / malformed
+            rows are skipped.
+        per_sqft: ComStock mode — divide each row's monthly values by
+            ``weight × sqft`` (null-safe) before averaging, yielding $/ft².
+
+    Returns:
+        DataFrame with ``upgrade``, optional ``scenario``, ``month`` (1–12),
+        and ``value`` (mean monthly bill). Empty when no parseable rows exist.
+    """
+    empty_schema = {"upgrade": pl.Int64, "month": pl.Int64, "value": pl.Float64}
+    if "monthly_bills" not in results_df.columns:
+        return pl.DataFrame(schema=empty_schema)
+
+    id_cols = ["upgrade"] + (["scenario"] if "scenario" in results_df.columns else [])
+    keep = id_cols + ["monthly_bills"]
+    if per_sqft:
+        keep += [c for c in ("weight", "sqft") if c in results_df.columns]
+
+    df = results_df.select(keep).filter(pl.col("monthly_bills").is_not_null())
+    if df.height == 0:
+        return pl.DataFrame(schema=empty_schema)
+
+    df = df.with_columns(
+        pl.col("monthly_bills").str.json_decode(pl.List(pl.Float64)).alias("_monthly")
+    ).filter(pl.col("_monthly").list.len() == 12)
+    if df.height == 0:
+        return pl.DataFrame(schema=empty_schema)
+
+    long = df.with_columns(pl.int_ranges(1, 13).alias("month")).explode(
+        ["_monthly", "month"]
+    )
+
+    if per_sqft:
+        if not {"weight", "sqft"}.issubset(long.columns):
+            return pl.DataFrame(schema=empty_schema)
+        denom = pl.col("weight") * pl.col("sqft")
+        value = (
+            pl.when(
+                pl.col("weight").is_not_null()
+                & pl.col("sqft").is_not_null()
+                & (denom > 0)
+            )
+            .then(pl.col("_monthly") / denom)
+            .otherwise(None)
+        )
+    else:
+        value = pl.col("_monthly")
+
+    return (
+        long.with_columns(value.alias("_value"))
+        .group_by(id_cols + ["month"])
+        .agg(pl.col("_value").mean().alias("value"))
+        .sort(id_cols + ["month"])
+    )
+
+
 def compute_bill_savings(
     results_df: pl.DataFrame,
     baseline_upgrade: int = 0,
