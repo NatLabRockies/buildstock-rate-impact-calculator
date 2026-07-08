@@ -212,6 +212,17 @@ class TestComStockResultsPage:
         assert not at.exception
         assert len(at.error) == 0
 
+    def test_outlier_toggle_off_by_default_and_reruns(
+        self, comstock_page: AppTest
+    ) -> None:
+        at = comstock_page
+        toggle = at.toggle(key="dist_show_outliers")
+        assert toggle.value is False
+        toggle.set_value(True)
+        at.run()
+        assert not at.exception
+        assert len(at.error) == 0
+
     def test_electricity_bill_sections_renamed(self, comstock_page: AppTest) -> None:
         subheaders = [s.value for s in comstock_page.subheader]
         assert "Mean Annual Electricity Bill" in subheaders

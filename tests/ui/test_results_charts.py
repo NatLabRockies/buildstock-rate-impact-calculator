@@ -375,12 +375,25 @@ class TestRenderBillDistribution:
             )
         return base
 
-    def test_tukey_whiskers_with_outliers(self) -> None:
+    def test_tukey_whiskers_outliers_hidden_by_default(self) -> None:
+        """Outlier points are expensive to render at scale — off by default."""
         spec = render_bill_distribution(self._df()).to_dict()
         mark = spec["mark"]
         assert mark["type"] == "boxplot"
         assert mark["extent"] == 1.5
-        assert mark["outliers"] is True
+        assert mark["outliers"] is False
+
+    def test_show_outliers_opt_in(self) -> None:
+        spec = render_bill_distribution(self._df(), show_outliers=True).to_dict()
+        assert spec["mark"]["outliers"] is True
+
+    def test_spec_only_carries_plotted_columns(self) -> None:
+        df = self._df().with_columns(
+            pl.lit("lots of metadata").alias("in.some_characteristic")
+        )
+        spec = render_bill_distribution(df).to_dict()
+        rows = spec["datasets"].popitem()[1]
+        assert set(rows[0].keys()) == {"upgrade", "annual_bill"}
 
     def test_per_rate_boxes_faceted_by_scenario(self) -> None:
         spec = render_bill_distribution(

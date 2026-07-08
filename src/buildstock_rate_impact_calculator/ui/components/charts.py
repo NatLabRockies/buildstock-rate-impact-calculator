@@ -196,15 +196,18 @@ def render_bill_distribution(
     scenario_col: Optional[str] = None,
     rate_col: Optional[str] = None,
     chart_title: str = "Electricity Bill Distribution by Scenario",
+    show_outliers: bool = False,
 ) -> alt.Chart:
     """
     Box-and-whisker distribution of per-building bills by upgrade scenario.
 
-    Whiskers follow the Tukey convention (Q1 − 1.5·IQR / Q3 + 1.5·IQR) with
-    outliers drawn as points. When ``rate_col`` is given (rate-sweep frames)
-    one box is drawn per rate, faceted by scenario, so every rate's
-    distribution is visible; scenario and rate labels wrap onto multiple
-    lines instead of truncating.
+    Whiskers follow the Tukey convention (Q1 − 1.5·IQR / Q3 + 1.5·IQR).
+    Outliers beyond the whiskers are hidden by default — each one is a
+    separate point mark, and rendering thousands of them makes the page
+    sluggish — pass ``show_outliers=True`` to draw them. When ``rate_col``
+    is given (rate-sweep frames) one box is drawn per rate, faceted by
+    scenario, so every rate's distribution is visible; scenario and rate
+    labels wrap onto multiple lines instead of truncating.
 
     Args:
         results_df: Raw results DataFrame from ``calculate_batch_bills``.
@@ -218,6 +221,7 @@ def render_bill_distribution(
             ``rate_col`` is given).
         rate_col: Rate name column; enables the per-rate view.
         chart_title: Chart title text.
+        show_outliers: Draw outlier points beyond the whiskers.
 
     Returns:
         Altair Chart object.
@@ -235,7 +239,7 @@ def render_bill_distribution(
 
         box = (
             alt.Chart(pandas_df)
-            .mark_boxplot(extent=1.5, outliers=True)
+            .mark_boxplot(extent=1.5, outliers=show_outliers)
             .encode(
                 # Rate identity is carried by the color legend; per-box x
                 # labels are hidden because wrapped rate names collide in
@@ -278,12 +282,17 @@ def render_bill_distribution(
             ),
         ).properties(title=chart_title)
 
-    pandas_df = df.to_pandas()
+    # Only the plotted columns go into the spec — the raw results frame can
+    # carry dozens of metadata columns that would bloat the chart payload.
+    keep = [upgrade_col, bill_col]
+    if group_col and group_col in df.columns:
+        keep.append(group_col)
+    pandas_df = df.select(keep).to_pandas()
     pandas_df[upgrade_col] = pandas_df[upgrade_col].astype(str)
 
     box = (
         alt.Chart(pandas_df)
-        .mark_boxplot(extent=1.5, outliers=True)
+        .mark_boxplot(extent=1.5, outliers=show_outliers)
         .encode(
             x=alt.X(f"{upgrade_col}:N", title="Upgrade Scenario"),
             y=alt.Y(

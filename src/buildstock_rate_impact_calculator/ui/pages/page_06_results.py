@@ -720,6 +720,16 @@ def render_results_page(app_state: AppState) -> None:
             dist_fmt = dollar_fmt
             dist_y_title = "Electricity Bill ($)"
         _dist_has_rates = "rate_name" in df_all.columns
+        show_outliers = st.toggle(
+            "Show outliers",
+            value=False,
+            key="dist_show_outliers",
+            help=(
+                "Draw points beyond the 1.5×IQR whiskers. Each outlier is a "
+                "separate mark, so large runs render noticeably slower with "
+                "this on."
+            ),
+        )
         dist_chart = render_bill_distribution(
             dist_df,
             bill_col=dist_bill_col,
@@ -732,11 +742,18 @@ def render_results_page(app_state: AppState) -> None:
                 if _dist_has_rates
                 else "Electricity Bill Distribution by Scenario"
             ),
+            show_outliers=show_outliers,
         )
         st.altair_chart(dist_chart, width="stretch")
         st.caption(
             "Electricity bill only. Whiskers extend to 1.5×IQR beyond the "
-            "quartiles; points beyond the whiskers are outliers."
+            "quartiles"
+            + (
+                "; points beyond the whiskers are outliers."
+                if show_outliers
+                else "; outliers beyond the whiskers are hidden "
+                "(enable 'Show outliers' to draw them)."
+            )
         )
         report_charts.append(("Electricity Bill Distribution", dist_chart))
     except Exception as exc:
@@ -1299,7 +1316,13 @@ def render_results_page(app_state: AppState) -> None:
                         _x_enc = alt.X("Group:N", title=None)
                     _chart = (
                         alt.Chart(_plot.to_pandas())
-                        .mark_boxplot(extent=1.5, outliers=True, size=60)
+                        .mark_boxplot(
+                            extent=1.5,
+                            # Follows the distribution section's outlier
+                            # toggle: outlier points are slow at scale.
+                            outliers=st.session_state.get("dist_show_outliers", False),
+                            size=60,
+                        )
                         .encode(
                             x=_x_enc,
                             y=alt.Y(
