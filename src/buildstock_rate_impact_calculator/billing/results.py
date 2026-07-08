@@ -73,6 +73,7 @@ _META_COLUMNS = frozenset(
         "fuel_oil_rate_name",
         "rate_name",
         "is_primary",
+        "rate_eligible",
         "applicable",
         # Per-row weighting plumbing (Phase 2: weight-aware billing pipeline)
         "weight",

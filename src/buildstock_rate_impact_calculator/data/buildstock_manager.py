@@ -78,6 +78,9 @@ class DatasetConfig:
     fuel_oil_bill_column: Optional[str] = None
     # Default electricity bill column (annual USD) for results when no custom rate is defined
     electricity_bill_column: Optional[str] = None
+    # Annual electricity consumption metadata column (kWh per building);
+    # numeric, so the Building Filters page renders it as a range slider.
+    electricity_energy_column: Optional[str] = None
     # Building characteristic columns shown as filter dropdowns on the Building
     # Filters page. Geographic columns (state/county/puma) are handled separately.
     filter_columns: Optional[List[str]] = None
@@ -232,8 +235,10 @@ class BuildStockDataManager:
                 "in.hvac_cooling_type",
                 "in.hvac_heating_type",
                 "in.water_heater_fuel",
+                "out.electricity.total.energy_consumption.kwh",
             ],
             income_column="in.income_recs_2020",
+            electricity_energy_column="out.electricity.total.energy_consumption.kwh",
         ),
         "resstock_2025_release_1": DatasetConfig(
             base_uri="https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/2025/resstock_amy2018_release_1",
@@ -265,8 +270,10 @@ class BuildStockDataManager:
                 "in.hvac_cooling_type",
                 "in.hvac_heating_type",
                 "in.water_heater_fuel",
+                "out.electricity.total.energy_consumption..kwh",
             ],
             income_column="in.income_recs_2020",
+            electricity_energy_column="out.electricity.total.energy_consumption..kwh",
         ),
         "comstock_2024_release_2": DatasetConfig(
             base_uri="https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/2024/comstock_amy2018_release_2",
@@ -298,7 +305,9 @@ class BuildStockDataManager:
                 "in.vintage",
                 "in.number_of_stories",
                 "in.hvac_system_type",
+                "out.electricity.total.energy_consumption..kwh",
             ],
+            electricity_energy_column="out.electricity.total.energy_consumption..kwh",
             geo_metadata_paths={
                 # Non-aggregate full metadata only: per-row weights, bldg_id
                 # may repeat. PUMA is intentionally unsupported for ComStock.
@@ -341,7 +350,9 @@ class BuildStockDataManager:
                 "in.vintage",
                 "in.number_of_stories",
                 "in.hvac_system_type",
+                "out.electricity.total.energy_consumption..kwh",
             ],
+            electricity_energy_column="out.electricity.total.energy_consumption..kwh",
             geo_metadata_paths={
                 # Non-aggregate full metadata only: per-row weights, bldg_id
                 # may repeat. PUMA is intentionally unsupported for ComStock.
@@ -691,6 +702,7 @@ class BuildStockDataManager:
             "fuel_oil_energy_column",
             "fuel_oil_bill_column",
             "electricity_bill_column",
+            "electricity_energy_column",
         ):
             col = getattr(self.config, attr, None)
             if col:

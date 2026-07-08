@@ -251,6 +251,30 @@ def render_results_page(app_state: AppState) -> None:
     if "is_primary" in df.columns:
         df = df.filter(pl.col("is_primary"))
 
+    # ── Rate eligibility screening (Phase 8) ──────────────────────────────────
+    if "rate_eligible" in df.columns and not df["rate_eligible"].fill_null(True).all():
+        _inelig = df.filter(~pl.col("rate_eligible").fill_null(True))
+        if "weight" in df.columns:
+            _w_inelig = _inelig["weight"].sum() or 0.0
+            _w_total = df["weight"].sum() or 0.0
+            _share = (_w_inelig / _w_total) if _w_total else 0.0
+            st.warning(
+                f"⚠ {_w_inelig:,.0f} of {_w_total:,.0f} weighted buildings "
+                f"({_share:.1%}) fall outside the assigned rate's eligibility "
+                "window (peak-kW / monthly-kWh limits declared by the rate)."
+            )
+        else:
+            st.warning(
+                f"⚠ {_inelig.height:,} of {df.height:,} building rows fall "
+                "outside the assigned rate's eligibility window."
+            )
+        if st.toggle(
+            "Exclude ineligible buildings from statistics",
+            key="exclude_rate_ineligible",
+        ):
+            df = df.filter(pl.col("rate_eligible").fill_null(True))
+            df_all = df_all.filter(pl.col("rate_eligible").fill_null(True))
+
     # ── Navigate-to-results banner ────────────────────────────────────────────
     if st.session_state.pop("_navigate_to_results", False):
         st.info("📂 Results loaded from project — displaying below.")

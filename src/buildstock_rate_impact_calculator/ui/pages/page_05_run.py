@@ -169,6 +169,7 @@ def _bill_upgrade_under_rates(
     load_records: list,
     variants: list[tuple[str, dict, bool]],
     tracker: ProgressTracker | None = None,
+    is_comstock: bool = False,
 ) -> pl.DataFrame:
     """Bill one upgrade's load records under each rate variant.
 
@@ -179,14 +180,21 @@ def _bill_upgrade_under_rates(
         tracker: Optional progress tracker; advanced once per (record, variant)
             so the active phase's total should be
             ``len(load_records) × len(variants)``.
+        is_comstock: Whether rows carry weighted quantities (used to normalize
+            per-building values for the rate-eligibility screen).
 
     Returns:
-        Concatenated results with ``rate_name`` and ``is_primary`` columns
-        stamped on every row (single-variant runs included, so the schema is
-        stable whether or not a sweep is configured).
+        Concatenated results with ``rate_name``, ``is_primary``, and
+        ``rate_eligible`` columns stamped on every row (single-variant runs
+        included, so the schema is stable whether or not a sweep is
+        configured).
     """
     from buildstock_rate_impact_calculator.billing.calculator import (
         UtilityBillCalculator,
+    )
+    from buildstock_rate_impact_calculator.rates.eligibility import (
+        flag_rate_eligibility,
+        rate_eligibility_bounds,
     )
 
     progress_cb = None
@@ -200,6 +208,9 @@ def _bill_upgrade_under_rates(
         calc = UtilityBillCalculator()
         result_df = calc.calculate_batch_bills(
             load_records, rate_config, progress_cb=progress_cb
+        )
+        result_df = flag_rate_eligibility(
+            result_df, rate_eligibility_bounds(rate_config), is_comstock
         )
         frames.append(
             result_df.with_columns(
@@ -747,11 +758,33 @@ def _run_pipeline(
                 total=len(load_records) * len(variants),
             )
             try:
-                result_df = _bill_upgrade_under_rates(load_records, variants, tracker)
+                result_df = _bill_upgrade_under_rates(
+                    load_records,
+                    variants,
+                    tracker,
+                    is_comstock=mgr.config.dataset_type == "comstock",
+                )
                 # Tag each building with its applicability status for this upgrade
                 result_df = result_df.with_columns(
                     pl.col("bldg_id").is_in(list(applicable_set)).alias("applicable")
                 )
+                # Surface rate-eligibility screening in the activity log.
+                if "rate_eligible" in result_df.columns:
+                    _elig_counts = (
+                        result_df.group_by("rate_name")
+                        .agg(
+                            (~pl.col("rate_eligible")).sum().alias("n_ineligible"),
+                            pl.len().alias("n_total"),
+                        )
+                        .sort("rate_name")
+                    )
+                    for _erow in _elig_counts.iter_rows(named=True):
+                        if _erow["n_ineligible"]:
+                            tracker.log(
+                                f"Upgrade {upgrade_id}: {_erow['n_ineligible']:,} of "
+                                f"{_erow['n_total']:,} buildings fall outside "
+                                f"'{_erow['rate_name']}' eligibility (kW/kWh window)."
+                            )
                 all_results.append(result_df)
             except Exception as exc:
                 tracker.log(

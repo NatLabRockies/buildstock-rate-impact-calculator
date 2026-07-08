@@ -81,6 +81,8 @@ def _resstock_results_df() -> pl.DataFrame:
             "peak_demand_kw": [3.0, 5.0, 2.0, 4.0],
             "in.vintage": ["1980s", "1990s", "1980s", "1990s"],
             "in.income_recs_2020": ["<20000", "150000+", "<20000", "150000+"],
+            # Phase 8: bldg 2 falls outside the assigned rate's window.
+            "rate_eligible": [True, False, True, False],
         }
     )
 
@@ -272,6 +274,24 @@ class TestResStockResultsPage:
         at.run()
         assert not at.exception
         assert len(at.error) == 0
+
+    def test_rate_eligibility_banner_and_toggle(self, resstock_page: AppTest) -> None:
+        """Phase 8: ineligible rows raise a warning; the toggle excludes them."""
+        at = resstock_page
+        warnings = " ".join(w.value for w in at.warning)
+        assert "eligibility window" in warnings
+
+        def _buildings_metric(app_test: AppTest) -> str:
+            return next(
+                m.value for m in app_test.metric if m.label == "Total Buildings"
+            )
+
+        assert _buildings_metric(at) == "2"
+        at.toggle(key="exclude_rate_ineligible").set_value(True)
+        at.run()
+        assert not at.exception
+        assert len(at.error) == 0
+        assert _buildings_metric(at) == "1"
 
     def test_winners_losers_metrics_shown(self, resstock_page: AppTest) -> None:
         """Phase 4: the savings section reports weighted saver/loser shares."""
