@@ -81,6 +81,9 @@ class DatasetConfig:
     # Building characteristic columns shown as filter dropdowns on the Building
     # Filters page. Geographic columns (state/county/puma) are handled separately.
     filter_columns: Optional[List[str]] = None
+    # Household income bin column (ResStock only) used for energy-burden
+    # reporting; None when the dataset has no income characteristic.
+    income_column: Optional[str] = None
     # Sub-state geographic metadata trees. ComStock metadata is only usable
     # from the non-aggregate by_state_and_county files (per-row weights valid
     # for bill calculations). Maps geo level ('county' | 'puma') to a path
@@ -230,6 +233,7 @@ class BuildStockDataManager:
                 "in.hvac_heating_type",
                 "in.water_heater_fuel",
             ],
+            income_column="in.income_recs_2020",
         ),
         "resstock_2025_release_1": DatasetConfig(
             base_uri="https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/2025/resstock_amy2018_release_1",
@@ -262,6 +266,7 @@ class BuildStockDataManager:
                 "in.hvac_heating_type",
                 "in.water_heater_fuel",
             ],
+            income_column="in.income_recs_2020",
         ),
         "comstock_2024_release_2": DatasetConfig(
             base_uri="https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/2024/comstock_amy2018_release_2",

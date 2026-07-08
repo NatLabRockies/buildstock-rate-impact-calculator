@@ -867,6 +867,84 @@ def render_results_page(app_state: AppState) -> None:
         except Exception as exc:
             st.error(f"Peak demand error: {exc}")
 
+    # ── Energy burden (ResStock only) ─────────────────────────────────────────
+    _income_col = BuildStockDataManager.DATASET_CONFIGS[_config_key].income_column
+    if not is_comstock and _income_col and _income_col in df.columns:
+        st.divider()
+        st.subheader("Energy Burden")
+        try:
+            from buildstock_rate_impact_calculator.billing.energy_burden import (
+                HIGH_BURDEN,
+                SEVERE_BURDEN,
+                add_energy_burden,
+                summarize_energy_burden,
+            )
+
+            burden_df = add_energy_burden(df_sel, _income_col, bill_col="selected_bill")
+            burden_summary = summarize_energy_burden(burden_df)
+            pct_cols = ["mean_burden", "median_burden", "pct_high", "pct_severe"]
+            # Scale to 0–100 for the printf "%.1f%%" column format.
+            burden_display = burden_summary.with_columns(
+                [(pl.col(c) * 100).alias(c) for c in pct_cols]
+            )
+            if 0 in upgrades:
+                _base_rows = burden_display.filter(pl.col("upgrade") == 0)
+                if _base_rows.height > 0:
+                    _base_burden = _base_rows["mean_burden"][0]
+                    if _base_burden is not None:
+                        burden_display = burden_display.with_columns(
+                            (pl.col("mean_burden") - _base_burden).alias(
+                                "delta_mean_burden"
+                            )
+                        )
+            display_cols = [
+                c
+                for c in (
+                    "scenario",
+                    "upgrade",
+                    "mean_burden",
+                    "median_burden",
+                    "pct_high",
+                    "pct_severe",
+                    "delta_mean_burden",
+                    "count",
+                )
+                if c in burden_display.columns
+            ]
+            burden_column_config = {
+                "mean_burden": st.column_config.NumberColumn(
+                    "Mean Burden", format="%.1f%%"
+                ),
+                "median_burden": st.column_config.NumberColumn(
+                    "Median Burden", format="%.1f%%"
+                ),
+                "pct_high": st.column_config.NumberColumn(
+                    f"High (≥{HIGH_BURDEN:.0%})", format="%.1f%%"
+                ),
+                "pct_severe": st.column_config.NumberColumn(
+                    f"Severe (≥{SEVERE_BURDEN:.0%})", format="%.1f%%"
+                ),
+                "delta_mean_burden": st.column_config.NumberColumn(
+                    "Δ Mean vs Baseline", format="%.1f%%"
+                ),
+            }
+            st.dataframe(
+                burden_display.select(display_cols).to_pandas(),
+                width="stretch",
+                hide_index=True,
+                column_config=burden_column_config,
+            )
+            st.caption(
+                "Energy burden = selected-source bills ÷ household income, "
+                "with income estimated as the midpoint of each "
+                f"`{_income_col}` bin (open-ended bins use half the bound "
+                "or 1.25× the bound). High/severe thresholds of "
+                f"{HIGH_BURDEN:.0%} / {SEVERE_BURDEN:.0%} follow DOE LEAD "
+                "conventions."
+            )
+        except Exception as exc:
+            st.error(f"Energy burden error: {exc}")
+
     # ── Upgrade vs Baseline Comparison ────────────────────────────────────────
     if "applicable" in df.columns and len(upgrades) > 1 and 0 in upgrades:
         st.divider()

@@ -67,6 +67,7 @@ def _resstock_results_df() -> pl.DataFrame:
             "annual_min_charge": [0.0, 0.0, 0.0, 0.0],
             "peak_demand_kw": [3.0, 5.0, 2.0, 4.0],
             "in.vintage": ["1980s", "1990s", "1980s", "1990s"],
+            "in.income_recs_2020": ["<20000", "150000+", "<20000", "150000+"],
         }
     )
 
@@ -173,6 +174,11 @@ class TestComStockResultsPage:
         subheaders = [s.value for s in comstock_page.subheader]
         assert "Monthly Bill Profile" in subheaders
 
+    def test_energy_burden_section_absent(self, comstock_page: AppTest) -> None:
+        """Energy burden is a ResStock-only view (no income data in ComStock)."""
+        subheaders = [s.value for s in comstock_page.subheader]
+        assert "Energy Burden" not in subheaders
+
     def test_peak_demand_section_present(self, comstock_page: AppTest) -> None:
         subheaders = [s.value for s in comstock_page.subheader]
         assert "Peak Demand" in subheaders
@@ -226,6 +232,11 @@ class TestResStockResultsPage:
         subheaders = [s.value for s in resstock_page.subheader]
         assert "Monthly Bill Profile" in subheaders
         assert "Peak Demand" in subheaders
+
+    def test_energy_burden_section_present(self, resstock_page: AppTest) -> None:
+        """Phase 6: income column present → Energy Burden section renders."""
+        subheaders = [s.value for s in resstock_page.subheader]
+        assert "Energy Burden" in subheaders
 
     def test_segment_breakout_renders(self, resstock_page: AppTest) -> None:
         """Phase 5: selecting a segment breaks savings out without errors."""
