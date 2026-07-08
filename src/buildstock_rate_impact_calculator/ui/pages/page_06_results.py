@@ -1292,8 +1292,15 @@ def render_results_page(app_state: AppState) -> None:
                 except Exception as exc:
                     st.warning(f"Stats error: {exc}")
 
-                # Box/whisker savings chart, split by applicability
+                # Box/whisker savings chart, split by applicability. Box
+                # statistics are pre-computed in Polars (only aggregate rows
+                # reach the browser); outliers follow the distribution
+                # section's toggle.
                 try:
+                    from buildstock_rate_impact_calculator.ui.components.charts import (
+                        render_boxplot,
+                    )
+
                     _plot = _merged.filter(pl.col(savings_value_col).is_not_null())
                     if "applicable" in _plot.columns:
                         _plot = _plot.with_columns(
@@ -1302,49 +1309,29 @@ def render_results_page(app_state: AppState) -> None:
                             .otherwise(pl.lit("Not Applicable"))
                             .alias("Group")
                         )
-                        _color = alt.Color(
-                            "Group:N",
-                            scale=alt.Scale(
-                                domain=["Applicable", "Not Applicable"],
-                                range=["#2196F3", "#FF9800"],
-                            ),
+                        _group_scale = alt.Scale(
+                            domain=["Applicable", "Not Applicable"],
+                            range=["#2196F3", "#FF9800"],
                         )
-                        _x_enc = alt.X("Group:N", title=None)
                     else:
                         _plot = _plot.with_columns(pl.lit("All").alias("Group"))
-                        _color = alt.value("#2196F3")
-                        _x_enc = alt.X("Group:N", title=None)
-                    _chart = (
-                        alt.Chart(_plot.to_pandas())
-                        .mark_boxplot(
-                            extent=1.5,
-                            # Follows the distribution section's outlier
-                            # toggle: outlier points are slow at scale.
-                            outliers=st.session_state.get("dist_show_outliers", False),
-                            size=60,
-                        )
-                        .encode(
-                            x=_x_enc,
-                            y=alt.Y(
-                                f"{savings_value_col}:Q",
-                                title=f"Annual Savings ({savings_unit})",
-                                axis=alt.Axis(format=comp_fmt),
-                            ),
-                            color=_color,
-                            tooltip=[
-                                alt.Tooltip(
-                                    f"{savings_value_col}:Q",
-                                    title=f"Savings ({savings_unit})",
-                                    format=comp_fmt,
-                                )
-                            ],
-                        )
-                        .properties(
-                            title="Annual Bill Savings vs Baseline",
-                            width=350,
-                            height=320,
-                        )
-                        .interactive()
+                        _group_scale = alt.Scale(domain=["All"], range=["#2196F3"])
+                    _chart = render_boxplot(
+                        _plot,
+                        value_col=savings_value_col,
+                        x_col="Group",
+                        color_col="Group",
+                        x_axis_title="",
+                        legend_title="Group",
+                        y_axis_title=f"Annual Savings ({savings_unit})",
+                        value_format=comp_fmt,
+                        show_outliers=st.session_state.get("dist_show_outliers", False),
+                        color_scale=_group_scale,
+                        box_size=60,
+                    ).properties(
+                        title="Annual Bill Savings vs Baseline",
+                        width=350,
+                        height=320,
                     )
                     st.altair_chart(_chart, width="stretch")
                 except Exception as exc:

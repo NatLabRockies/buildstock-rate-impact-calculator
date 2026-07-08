@@ -16,15 +16,18 @@ rendering the chart, so they run offline with no Vega-Lite runtime.
 
 from __future__ import annotations
 
+import altair as alt
 import polars as pl
 import pytest
 
 from buildstock_rate_impact_calculator.ui.components.charts import (
+    compute_boxplot_stats,
     melt_fuels_to_long,
     render_bill_comparison_bar,
     render_bill_distribution,
     render_bill_rate_bar,
     render_bill_stack_bar,
+    render_boxplot,
     render_monthly_profile,
     render_savings_histogram,
 )
@@ -356,14 +359,54 @@ class TestRenderBillRateBar:
 # ---------------------------------------------------------------------------
 
 
+class TestComputeBoxplotStats:
+    def test_hand_computed_stats(self) -> None:
+        """[1, 2, 3, 4, 100]: q1=2, median=3, q3=4, fences (-1, 7) → 100 is
+        an outlier and the whiskers stop at the extreme in-fence values."""
+        df = pl.DataFrame({"g": ["a"] * 5, "v": [1.0, 2.0, 3.0, 4.0, 100.0]})
+        stats, outliers = compute_boxplot_stats(df, "v", ["g"])
+        row = stats.row(0, named=True)
+        assert row["q1"] == pytest.approx(2.0)
+        assert row["median"] == pytest.approx(3.0)
+        assert row["q3"] == pytest.approx(4.0)
+        assert row["iqr"] == pytest.approx(2.0)
+        assert row["whisker_low"] == pytest.approx(1.0)
+        assert row["whisker_high"] == pytest.approx(4.0)
+        assert row["count"] == 5
+        assert outliers["v"].to_list() == [100.0]
+
+    def test_no_outliers_whiskers_at_extremes(self) -> None:
+        df = pl.DataFrame({"g": ["a"] * 4, "v": [1.0, 2.0, 3.0, 4.0]})
+        stats, outliers = compute_boxplot_stats(df, "v", ["g"])
+        row = stats.row(0, named=True)
+        assert row["whisker_low"] == pytest.approx(1.0)
+        assert row["whisker_high"] == pytest.approx(4.0)
+        assert outliers.height == 0
+
+    def test_per_group_and_null_handling(self) -> None:
+        df = pl.DataFrame(
+            {
+                "g": ["a", "a", "a", "b", "b", "b"],
+                "v": [1.0, 2.0, None, 10.0, 20.0, 30.0],
+            }
+        )
+        stats, _ = compute_boxplot_stats(df, "v", ["g"])
+        by_group = {r["g"]: r for r in stats.iter_rows(named=True)}
+        assert by_group["a"]["count"] == 2  # null dropped
+        assert by_group["b"]["median"] == pytest.approx(20.0)
+
+
 class TestRenderBillDistribution:
     def _df(self, with_rates: bool = False) -> pl.DataFrame:
+        # 5 buildings per upgrade; the last value in each group lies far
+        # beyond the 1.5×IQR fence → exactly one outlier per box.
         base = pl.DataFrame(
             {
-                "bldg_id": [1, 2, 3, 1, 2, 3],
-                "upgrade": [0, 0, 0, 1, 1, 1],
-                "scenario": ["Baseline"] * 3 + ["Upgrade 1"] * 3,
-                "annual_bill": [1000.0, 1100.0, 5000.0, 800.0, 900.0, 4000.0],
+                "bldg_id": [1, 2, 3, 4, 5] * 2,
+                "upgrade": [0] * 5 + [1] * 5,
+                "scenario": ["Baseline"] * 5 + ["Upgrade 1"] * 5,
+                "annual_bill": [1000.0, 1010.0, 1020.0, 1030.0, 99_999.0]
+                + [800.0, 810.0, 820.0, 830.0, 88_888.0],
             }
         )
         if with_rates:
@@ -375,25 +418,44 @@ class TestRenderBillDistribution:
             )
         return base
 
-    def test_tukey_whiskers_outliers_hidden_by_default(self) -> None:
-        """Outlier points are expensive to render at scale — off by default."""
+    def test_precomputed_stats_one_row_per_box(self) -> None:
+        """The spec ships aggregate rows, not per-building rows."""
         spec = render_bill_distribution(self._df()).to_dict()
-        mark = spec["mark"]
-        assert mark["type"] == "boxplot"
-        assert mark["extent"] == 1.5
-        assert mark["outliers"] is False
-
-    def test_show_outliers_opt_in(self) -> None:
-        spec = render_bill_distribution(self._df(), show_outliers=True).to_dict()
-        assert spec["mark"]["outliers"] is True
-
-    def test_spec_only_carries_plotted_columns(self) -> None:
-        df = self._df().with_columns(
-            pl.lit("lots of metadata").alias("in.some_characteristic")
-        )
-        spec = render_bill_distribution(df).to_dict()
         rows = spec["datasets"].popitem()[1]
-        assert set(rows[0].keys()) == {"upgrade", "annual_bill"}
+        assert len(rows) == 2  # one stats row per upgrade, no outlier rows
+        assert {"q1", "median", "q3", "whisker_low", "whisker_high"}.issubset(
+            rows[0].keys()
+        )
+
+    def test_layers_draw_whisker_box_median(self) -> None:
+        spec = render_bill_distribution(self._df()).to_dict()
+        layers = spec["layer"]
+        assert len(layers) == 3
+        whisker, box, median = layers
+        assert whisker["mark"]["type"] == "rule"
+        assert whisker["encoding"]["y"]["field"] == "whisker_low"
+        assert whisker["encoding"]["y2"]["field"] == "whisker_high"
+        assert box["mark"]["type"] == "bar"
+        assert box["encoding"]["y"]["field"] == "q1"
+        assert box["encoding"]["y2"]["field"] == "q3"
+        assert median["mark"]["type"] == "tick"
+        assert median["encoding"]["y"]["field"] == "median"
+
+    def test_outliers_hidden_by_default(self) -> None:
+        spec = render_bill_distribution(self._df()).to_dict()
+        assert len(spec["layer"]) == 3
+        rows = spec["datasets"].popitem()[1]
+        assert all(r["_role"] == "box" for r in rows)
+
+    def test_show_outliers_adds_point_layer_and_rows(self) -> None:
+        spec = render_bill_distribution(self._df(), show_outliers=True).to_dict()
+        layers = spec["layer"]
+        assert len(layers) == 4
+        assert layers[3]["mark"]["type"] == "point"
+        rows = spec["datasets"].popitem()[1]
+        # 2 stats rows + 2 outlier rows (one extreme value per upgrade).
+        assert sum(r["_role"] == "box" for r in rows) == 2
+        assert sum(r["_role"] == "outlier" for r in rows) == 2
 
     def test_per_rate_boxes_faceted_by_scenario(self) -> None:
         spec = render_bill_distribution(
@@ -405,11 +467,14 @@ class TestRenderBillDistribution:
         # identity lives in the color legend (inner x labels are hidden so
         # long rate names cannot collide).
         assert spec["facet"]["column"]["field"] == "_scenario_wrapped"
-        inner = spec["spec"]
-        assert inner["encoding"]["x"]["field"] == "_rate_wrapped"
-        assert inner["encoding"]["x"]["axis"]["labels"] is False
-        assert inner["encoding"]["color"]["field"] == "_rate_wrapped"
-        assert inner["mark"]["extent"] == 1.5
+        inner_layers = spec["spec"]["layer"]
+        box = inner_layers[1]
+        assert box["encoding"]["x"]["field"] == "_rate_wrapped"
+        assert box["encoding"]["x"]["axis"]["labels"] is False
+        assert box["encoding"]["color"]["field"] == "_rate_wrapped"
+        # 2 scenarios × 2 rates = 4 stats rows total.
+        rows = spec["datasets"].popitem()[1]
+        assert len(rows) == 4
 
     def test_facet_headers_wrapped_untruncated(self) -> None:
         spec = render_bill_distribution(
@@ -427,7 +492,38 @@ class TestRenderBillDistribution:
         ).to_dict()
         # rate_name absent from the frame → single box per upgrade.
         assert "facet" not in spec
-        assert spec["encoding"]["x"]["field"] == "upgrade"
+        box = spec["layer"][1]
+        assert box["encoding"]["x"]["field"] == "_upgrade_str"
+
+
+class TestRenderBoxplot:
+    def test_custom_color_scale_and_hidden_x_title(self) -> None:
+        df = pl.DataFrame(
+            {
+                "Group": ["Applicable"] * 3 + ["Not Applicable"] * 3,
+                "sav": [10.0, 20.0, 30.0, -5.0, 0.0, 5.0],
+            }
+        )
+        chart = render_boxplot(
+            df,
+            value_col="sav",
+            x_col="Group",
+            color_col="Group",
+            x_axis_title="",
+            y_axis_title="Annual Savings ($)",
+            color_scale=alt.Scale(
+                domain=["Applicable", "Not Applicable"],
+                range=["#2196F3", "#FF9800"],
+            ),
+            box_size=60,
+        )
+        spec = chart.to_dict()
+        box = spec["layer"][1]
+        assert box["encoding"]["x"]["title"] is None  # hidden via ""
+        assert box["encoding"]["color"]["scale"]["range"] == ["#2196F3", "#FF9800"]
+        assert box["mark"]["size"] == 60
+        rows = spec["datasets"].popitem()[1]
+        assert len(rows) == 2  # one stats row per group
 
 
 # ---------------------------------------------------------------------------

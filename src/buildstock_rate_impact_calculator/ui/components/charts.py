@@ -4,7 +4,7 @@ Altair chart components for BuildStock TOU Calculator results visualization.
 
 from __future__ import annotations
 import textwrap
-from typing import Mapping, Optional
+from typing import Mapping, Optional, Sequence
 
 import altair as alt
 import pandas as pd
@@ -17,11 +17,21 @@ _LABEL_LINE_SEP = "|"
 _LABEL_WRAP_EXPR = f"split(datum.label, '{_LABEL_LINE_SEP}')"
 
 
-def _wrap_labels(values: "pd.Series", width: int = 20) -> "pd.Series":
-    """Wrap each label at ~``width`` chars, joining lines with the separator
+def _wrap_text(value: object, width: int = 20) -> str:
+    """Wrap one label at ~``width`` chars, joining lines with the separator
     consumed by :data:`_LABEL_WRAP_EXPR`."""
-    return values.map(
-        lambda v: _LABEL_LINE_SEP.join(textwrap.wrap(str(v), width=width)) or str(v)
+    return _LABEL_LINE_SEP.join(textwrap.wrap(str(value), width=width)) or str(value)
+
+
+def _wrap_labels(values: "pd.Series", width: int = 20) -> "pd.Series":
+    """Vectorized :func:`_wrap_text` over a pandas Series."""
+    return values.map(lambda v: _wrap_text(v, width))
+
+
+def _wrap_expr(col: str, width: int = 20) -> pl.Expr:
+    """Polars expression producing the wrapped form of a label column."""
+    return pl.col(col).map_elements(
+        lambda v: _wrap_text(v, width), return_dtype=pl.Utf8
     )
 
 
@@ -33,6 +43,222 @@ def _escape_field(name: str) -> str:
     every mark collapses onto a single axis position.
     """
     return name.replace(".", "\\.")
+
+
+def compute_boxplot_stats(
+    df: pl.DataFrame,
+    value_col: str,
+    group_cols: Sequence[str],
+) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """Per-group Tukey box-plot statistics, computed in Polars.
+
+    Pre-computing lets charts ship a handful of aggregate rows to Vega-Lite
+    instead of every per-building value (the built-in ``mark_boxplot``
+    embeds the full dataset in the spec and aggregates client-side).
+
+    Args:
+        df: Frame with ``value_col`` and the grouping columns.
+        value_col: Numeric column to summarize. Null/NaN values are dropped.
+        group_cols: One box per unique combination of these columns.
+
+    Returns:
+        ``(stats, outliers)`` where *stats* has one row per group with
+        ``q1``, ``median``, ``q3``, ``iqr``, ``whisker_low`` / ``whisker_high``
+        (most extreme values within Q1 − 1.5·IQR / Q3 + 1.5·IQR, matching the
+        Vega-Lite boxplot convention), and ``count``; *outliers* holds the
+        individual rows beyond the whiskers (group columns + ``value_col``).
+    """
+    group_cols = list(group_cols)
+    value = pl.col(value_col)
+    df = df.filter(value.is_not_null() & value.is_not_nan())
+
+    stats = (
+        df.group_by(group_cols)
+        .agg(
+            value.quantile(0.25, interpolation="linear").alias("q1"),
+            value.quantile(0.5, interpolation="linear").alias("median"),
+            value.quantile(0.75, interpolation="linear").alias("q3"),
+            pl.len().alias("count"),
+        )
+        .with_columns((pl.col("q3") - pl.col("q1")).alias("iqr"))
+        .with_columns(
+            (pl.col("q1") - 1.5 * pl.col("iqr")).alias("_lo_fence"),
+            (pl.col("q3") + 1.5 * pl.col("iqr")).alias("_hi_fence"),
+        )
+    )
+
+    joined = df.select(group_cols + [value_col]).join(
+        stats.select(group_cols + ["_lo_fence", "_hi_fence"]),
+        on=group_cols,
+        how="left",
+    )
+    within = joined.filter(
+        (value >= pl.col("_lo_fence")) & (value <= pl.col("_hi_fence"))
+    )
+    whiskers = within.group_by(group_cols).agg(
+        value.min().alias("whisker_low"),
+        value.max().alias("whisker_high"),
+    )
+    stats = (
+        stats.join(whiskers, on=group_cols, how="left")
+        .with_columns(
+            pl.coalesce(pl.col("whisker_low"), pl.col("q1")).alias("whisker_low"),
+            pl.coalesce(pl.col("whisker_high"), pl.col("q3")).alias("whisker_high"),
+        )
+        .drop(["_lo_fence", "_hi_fence"])
+    )
+    outliers = joined.filter(
+        (value < pl.col("_lo_fence")) | (value > pl.col("_hi_fence"))
+    ).select(group_cols + [value_col])
+    return stats, outliers
+
+
+def render_boxplot(
+    df: pl.DataFrame,
+    value_col: str,
+    x_col: str,
+    *,
+    y_axis_title: str,
+    color_col: Optional[str] = None,
+    extra_group_cols: Optional[Sequence[str]] = None,
+    x_axis_title: Optional[str] = None,
+    legend_title: Optional[str] = None,
+    value_format: str = "$.0f",
+    show_outliers: bool = False,
+    x_sort: Optional[list] = None,
+    x_axis: Optional[alt.Axis] = None,
+    legend: Optional[alt.Legend] = None,
+    color_scale: Optional[alt.Scale] = None,
+    box_size: int = 36,
+    tooltip_prefix: Optional[list[alt.Tooltip]] = None,
+) -> alt.LayerChart:
+    """Box-and-whisker chart drawn from Polars-precomputed statistics.
+
+    The chart data holds one row per box (plus one per outlier when
+    ``show_outliers`` is on) rather than one per building, so it stays fast
+    at any run size. Whiskers follow the Tukey 1.5·IQR convention. The
+    returned layer chart carries its data at the top level, so it can be
+    faceted by any of ``extra_group_cols``.
+
+    Args:
+        df: Per-row frame with ``value_col`` and the grouping columns.
+        value_col: Numeric column to summarize.
+        x_col: Column giving one box per value on the x-axis.
+        y_axis_title: Y-axis label.
+        color_col: Column driving box color (defaults to no color encoding).
+        extra_group_cols: Additional columns kept on the stats rows (facet
+            keys, tooltip context). Must be constant within each x/color
+            group.
+        x_axis_title: X-axis label (defaults to ``x_col``).
+        legend_title: Legend label (defaults to ``color_col``).
+        value_format: D3 numeric format for tooltips / axis labels.
+        show_outliers: Include and draw per-row outlier points.
+        x_sort: Explicit x-axis category order.
+        x_axis: Optional x-axis override (e.g. hide labels).
+        legend: Optional legend override (e.g. wrapped labels).
+        color_scale: Optional color scale (e.g. fixed domain/range).
+        box_size: Box/median-tick width in pixels.
+        tooltip_prefix: Tooltips prepended to the per-box stats tooltips.
+
+    Returns:
+        Altair LayerChart (whisker rule + IQR box + median tick, and an
+        outlier point layer when enabled).
+    """
+    group_cols = list(
+        dict.fromkeys(
+            [x_col] + ([color_col] if color_col else []) + list(extra_group_cols or [])
+        )
+    )
+    stats, outliers = compute_boxplot_stats(df, value_col, group_cols)
+
+    # Single top-level dataset (required for faceting a layer chart): stats
+    # rows and — only when requested — outlier rows, told apart by _role.
+    stats = stats.with_columns(pl.lit("box").alias("_role"))
+    if show_outliers and outliers.height > 0:
+        outliers = outliers.with_columns(pl.lit("outlier").alias("_role"))
+        combined = pl.concat([stats, outliers], how="diagonal")
+    else:
+        combined = stats
+
+    x_field = _escape_field(x_col)
+    # None → default to the column name; "" → hide the axis title.
+    x_kwargs: dict = {
+        "title": x_col if x_axis_title is None else (x_axis_title or None)
+    }
+    if x_sort is not None:
+        x_kwargs["sort"] = x_sort
+    if x_axis is not None:
+        x_kwargs["axis"] = x_axis
+    x = alt.X(f"{x_field}:N", **x_kwargs)
+
+    color = alt.Undefined
+    if color_col:
+        color_kwargs: dict = {"title": legend_title or color_col}
+        if color_scale is not None:
+            color_kwargs["scale"] = color_scale
+        if legend is not None:
+            color_kwargs["legend"] = legend
+        if x_sort is not None and color_col == x_col:
+            color_kwargs["sort"] = x_sort
+        color = alt.Color(f"{_escape_field(color_col)}:N", **color_kwargs)
+
+    stats_tooltips = list(tooltip_prefix or []) + [
+        alt.Tooltip("whisker_high:Q", title="Upper whisker", format=value_format),
+        alt.Tooltip("q3:Q", title="Q3", format=value_format),
+        alt.Tooltip("median:Q", title="Median", format=value_format),
+        alt.Tooltip("q1:Q", title="Q1", format=value_format),
+        alt.Tooltip("whisker_low:Q", title="Lower whisker", format=value_format),
+        alt.Tooltip("count:Q", title="Buildings"),
+    ]
+
+    base = alt.Chart().transform_filter(alt.datum._role == "box")
+    whisker = base.mark_rule().encode(
+        x=x,
+        y=alt.Y(
+            "whisker_low:Q",
+            title=y_axis_title,
+            axis=alt.Axis(format=value_format),
+        ),
+        y2="whisker_high:Q",
+    )
+    box = base.mark_bar(size=box_size).encode(
+        x=x,
+        y=alt.Y("q1:Q", title=y_axis_title),
+        y2="q3:Q",
+        color=color,
+        tooltip=stats_tooltips,
+    )
+    median = base.mark_tick(color="white", size=box_size, thickness=2).encode(
+        x=x,
+        y=alt.Y("median:Q", title=y_axis_title),
+    )
+    layers = [whisker, box, median]
+
+    if show_outliers and outliers.height > 0:
+        outlier_tooltips = list(tooltip_prefix or []) + [
+            alt.Tooltip(
+                f"{_escape_field(value_col)}:Q",
+                title=y_axis_title,
+                format=value_format,
+            ),
+        ]
+        points = (
+            alt.Chart()
+            .transform_filter(alt.datum._role == "outlier")
+            .mark_point()
+            .encode(
+                x=x,
+                y=alt.Y(
+                    f"{_escape_field(value_col)}:Q",
+                    title=y_axis_title,
+                ),
+                color=color,
+                tooltip=outlier_tooltips,
+            )
+        )
+        layers.append(points)
+
+    return alt.layer(*layers, data=combined.to_pandas())
 
 
 def render_bill_comparison_bar(
@@ -201,13 +427,16 @@ def render_bill_distribution(
     """
     Box-and-whisker distribution of per-building bills by upgrade scenario.
 
+    Statistics are pre-computed in Polars (:func:`compute_boxplot_stats`)
+    so the chart spec carries one row per box instead of one per building.
     Whiskers follow the Tukey convention (Q1 − 1.5·IQR / Q3 + 1.5·IQR).
     Outliers beyond the whiskers are hidden by default — each one is a
-    separate point mark, and rendering thousands of them makes the page
-    sluggish — pass ``show_outliers=True`` to draw them. When ``rate_col``
-    is given (rate-sweep frames) one box is drawn per rate, faceted by
-    scenario, so every rate's distribution is visible; scenario and rate
-    labels wrap onto multiple lines instead of truncating.
+    separate point mark, and shipping/rendering thousands of them makes the
+    page sluggish — pass ``show_outliers=True`` to include and draw them.
+    When ``rate_col`` is given (rate-sweep frames) one box is drawn per
+    rate, faceted by scenario, so every rate's distribution is visible;
+    scenario and rate labels wrap onto multiple lines instead of
+    truncating.
 
     Args:
         results_df: Raw results DataFrame from ``calculate_batch_bills``.
@@ -229,48 +458,40 @@ def render_bill_distribution(
     df = results_df.filter(pl.col(bill_col).is_not_null())
 
     if rate_col and rate_col in df.columns and scenario_col in df.columns:
-        keep = [scenario_col, rate_col, upgrade_col, bill_col]
-        pandas_df = df.select(keep).to_pandas()
-        pandas_df = pandas_df.sort_values([upgrade_col, rate_col])
-        pandas_df["_scenario_wrapped"] = _wrap_labels(pandas_df[scenario_col])
-        pandas_df["_rate_wrapped"] = _wrap_labels(pandas_df[rate_col])
-        scenario_order = list(dict.fromkeys(pandas_df["_scenario_wrapped"]))
-        rate_order = sorted(set(pandas_df["_rate_wrapped"]))
-
-        box = (
-            alt.Chart(pandas_df)
-            .mark_boxplot(extent=1.5, outliers=show_outliers)
-            .encode(
-                # Rate identity is carried by the color legend; per-box x
-                # labels are hidden because wrapped rate names collide in
-                # the narrow facet bands.
-                x=alt.X(
-                    "_rate_wrapped:N",
-                    title="Rate",
-                    sort=rate_order,
-                    axis=alt.Axis(labels=False, ticks=False),
-                ),
-                y=alt.Y(
-                    f"{bill_col}:Q",
-                    title=y_axis_title,
-                    axis=alt.Axis(format=value_format),
-                ),
-                color=alt.Color(
-                    "_rate_wrapped:N",
-                    title="Rate",
-                    sort=rate_order,
-                    legend=alt.Legend(labelLimit=0, labelExpr=_LABEL_WRAP_EXPR),
-                ),
-                tooltip=[
-                    alt.Tooltip(f"{scenario_col}:N", title="Scenario"),
-                    alt.Tooltip(f"{rate_col}:N", title="Rate"),
-                    alt.Tooltip(
-                        f"{bill_col}:Q", title=y_axis_title, format=value_format
-                    ),
-                ],
-            )
-            .properties(width=180, height=350)
+        df = df.select([scenario_col, rate_col, upgrade_col, bill_col]).with_columns(
+            _wrap_expr(scenario_col).alias("_scenario_wrapped"),
+            _wrap_expr(rate_col).alias("_rate_wrapped"),
         )
+        order_df = (
+            df.select([upgrade_col, "_scenario_wrapped", "_rate_wrapped"])
+            .unique()
+            .sort([upgrade_col, "_rate_wrapped"])
+        )
+        scenario_order = list(dict.fromkeys(order_df["_scenario_wrapped"].to_list()))
+        rate_order = sorted(set(order_df["_rate_wrapped"].to_list()))
+
+        box = render_boxplot(
+            df,
+            value_col=bill_col,
+            x_col="_rate_wrapped",
+            color_col="_rate_wrapped",
+            extra_group_cols=[scenario_col, rate_col, upgrade_col, "_scenario_wrapped"],
+            x_axis_title="Rate",
+            legend_title="Rate",
+            y_axis_title=y_axis_title,
+            value_format=value_format,
+            show_outliers=show_outliers,
+            x_sort=rate_order,
+            # Rate identity is carried by the color legend; per-box x labels
+            # are hidden because wrapped rate names collide in the narrow
+            # facet bands.
+            x_axis=alt.Axis(labels=False, ticks=False),
+            legend=alt.Legend(labelLimit=0, labelExpr=_LABEL_WRAP_EXPR),
+            tooltip_prefix=[
+                alt.Tooltip(f"{scenario_col}:N", title="Scenario"),
+                alt.Tooltip(f"{rate_col}:N", title="Rate"),
+            ],
+        ).properties(width=180, height=350)
         return box.facet(
             column=alt.Column(
                 "_scenario_wrapped:N",
@@ -282,47 +503,31 @@ def render_bill_distribution(
             ),
         ).properties(title=chart_title)
 
-    # Only the plotted columns go into the spec — the raw results frame can
-    # carry dozens of metadata columns that would bloat the chart payload.
-    keep = [upgrade_col, bill_col]
-    if group_col and group_col in df.columns:
-        keep.append(group_col)
-    pandas_df = df.select(keep).to_pandas()
-    pandas_df[upgrade_col] = pandas_df[upgrade_col].astype(str)
-
-    box = (
-        alt.Chart(pandas_df)
-        .mark_boxplot(extent=1.5, outliers=show_outliers)
-        .encode(
-            x=alt.X(f"{upgrade_col}:N", title="Upgrade Scenario"),
-            y=alt.Y(
-                f"{bill_col}:Q",
-                title=y_axis_title,
-                axis=alt.Axis(format=value_format),
-            ),
-            color=alt.Color(f"{upgrade_col}:N", title="Upgrade"),
-            tooltip=[
-                alt.Tooltip(f"{upgrade_col}:N", title="Upgrade"),
-                alt.Tooltip(f"{bill_col}:Q", title=y_axis_title, format=value_format),
-            ],
-        )
+    df = df.with_columns(pl.col(upgrade_col).cast(pl.Utf8).alias("_upgrade_str"))
+    extra_cols = [group_col] if group_col and group_col in df.columns else []
+    box = render_boxplot(
+        df,
+        value_col=bill_col,
+        x_col="_upgrade_str",
+        color_col="_upgrade_str",
+        extra_group_cols=extra_cols,
+        x_axis_title="Upgrade Scenario",
+        legend_title="Upgrade",
+        y_axis_title=y_axis_title,
+        value_format=value_format,
+        show_outliers=show_outliers,
+        tooltip_prefix=[alt.Tooltip("_upgrade_str:N", title="Upgrade")],
     )
 
-    if group_col and group_col in pandas_df.columns:
-        box = box.facet(
+    if extra_cols:
+        return box.facet(
             facet=alt.Facet(
-                f"{group_col}:N", title=group_col.replace("_", " ").title()
+                f"{_escape_field(group_col)}:N",
+                title=group_col.replace("_", " ").title(),
             ),
             columns=3,
         ).properties(title=chart_title)
-    else:
-        box = box.properties(
-            title=chart_title,
-            width=600,
-            height=350,
-        ).interactive()
-
-    return box
+    return box.properties(title=chart_title, width=600, height=350)
 
 
 def render_savings_histogram(
