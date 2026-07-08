@@ -61,6 +61,9 @@ class AppState:
     )
     # Maps rate name → URDB label (for URDB rates only); used to re-fetch missing rate files
     rate_label_map: dict[str, str] = field(default_factory=dict)
+    # Rate sweep: names of extra electricity rates (keys in rate_library) that
+    # every scenario is additionally billed under.
+    comparison_rates: list[str] = field(default_factory=list)
 
     # ── API / credentials ────────────────────────────────────────────────────
     urdb_api_key: str = ""
@@ -104,6 +107,7 @@ class AppState:
         "rate_assignments",
         "fuel_rate_assignments",
         "rate_label_map",
+        "comparison_rates",
         "urdb_api_key",
         "output_dir",
         "project_name",

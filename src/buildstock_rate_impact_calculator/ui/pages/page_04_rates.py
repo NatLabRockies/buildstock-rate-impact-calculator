@@ -453,6 +453,29 @@ def render_rates_page(app_state: AppState) -> None:
             else:
                 app_state.fuel_rate_assignments[scenario_key][ft] = chosen_fuel
 
+    # ── Comparison rates (rate sweep) ─────────────────────────────────────────
+    st.divider()
+    st.subheader("Comparison Rates (Rate Sweep)")
+    elec_rate_names = list(app_state.rate_library.keys())
+    if elec_rate_names:
+        chosen_comparison = st.multiselect(
+            "Comparison rates (rate sweep)",
+            options=elec_rate_names,
+            default=[n for n in app_state.comparison_rates if n in elec_rate_names],
+            key="comparison_rates_select",
+            help=(
+                "Every scenario is additionally billed under each selected "
+                "rate; runtime scales accordingly. Results gain a Rate "
+                "Comparison matrix."
+            ),
+        )
+        if chosen_comparison != app_state.comparison_rates:
+            app_state.comparison_rates = list(chosen_comparison)
+            if app_state.project_name:
+                _save_project(app_state)
+    else:
+        st.caption("Add electricity rates above to enable the rate sweep.")
+
     # ── Assignment summary ────────────────────────────────────────────────────
     assigned_count = len(app_state.rate_assignments)
     total_scenarios = len(scenarios)

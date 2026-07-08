@@ -71,6 +71,8 @@ _META_COLUMNS = frozenset(
         "natural_gas_rate_name",
         "propane_rate_name",
         "fuel_oil_rate_name",
+        "rate_name",
+        "is_primary",
         "applicable",
         # Per-row weighting plumbing (Phase 2: weight-aware billing pipeline)
         "weight",
@@ -474,6 +476,11 @@ def compute_bill_savings(
     join_keys = ["bldg_id"]
     if "_row_uid" in results_df.columns:
         join_keys.append("_row_uid")
+    # Rate-sweep frames carry one row per rate variant; joining on rate_name
+    # makes savings same-rate-baseline (baseline under rate R − upgrade
+    # under rate R).
+    if "rate_name" in results_df.columns:
+        join_keys.append("rate_name")
 
     baseline_sel: list = [pl.col(bill_col).alias("baseline_bill")]
     if has_per_sqft:

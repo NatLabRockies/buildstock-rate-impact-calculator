@@ -244,6 +244,13 @@ def render_results_page(app_state: AppState) -> None:
         .alias("scenario")
     )
 
+    # Rate-sweep frames carry one row per rate variant. Every pre-existing
+    # section reports the primary assigned rate only; ``df_all`` keeps all
+    # variants for the Rate Comparison section.
+    df_all = df
+    if "is_primary" in df.columns:
+        df = df.filter(pl.col("is_primary"))
+
     # ── Navigate-to-results banner ────────────────────────────────────────────
     if st.session_state.pop("_navigate_to_results", False):
         st.info("📂 Results loaded from project — displaying below.")
@@ -512,6 +519,89 @@ def render_results_page(app_state: AppState) -> None:
             st.caption("No rates are assigned to the scenarios in these results.")
     except Exception as exc:
         st.error(f"Rate summary error: {exc}")
+
+    # ── Rate comparison (rate sweep) ──────────────────────────────────────────
+    if "rate_name" in df_all.columns and df_all["rate_name"].n_unique() > 1:
+        st.divider()
+        st.subheader("Rate Comparison")
+        rate_comp_view = st.radio(
+            "Rate comparison view",
+            ["Mean bill", "Mean savings"],
+            horizontal=True,
+            key="rate_comparison_view",
+        )
+        try:
+            matrix_fmt = table_per_sqft_fmt if is_comstock else table_dollar_fmt
+            if rate_comp_view == "Mean bill":
+                comp_summary = summarize_bills(
+                    df_all,
+                    dataset_type=ds_type,
+                    group_by=["rate_name"],
+                    bill_columns=bill_cols,
+                )
+                comp_value = "mean_per_sqft" if is_comstock else "mean_annual_bill"
+                comp_summary = comp_summary.with_columns(
+                    pl.col("upgrade")
+                    .map_elements(
+                        lambda u: _scenario_display(_base_uri, u),
+                        return_dtype=pl.Utf8,
+                    )
+                    .alias("scenario")
+                )
+                matrix = comp_summary.pivot(
+                    values=comp_value, index="scenario", on="rate_name"
+                )
+                st.caption(
+                    "Mean electricity bill per scenario under each rate "
+                    + ("($/ft²)." if is_comstock else "($ per building).")
+                )
+            else:
+                # Same-rate-baseline savings: baseline under rate R minus
+                # upgrade under rate R (compute_bill_savings joins on
+                # rate_name automatically).
+                df_all_sel = with_selected_bill(df_all, bill_cols)
+                if is_comstock:
+                    df_all_sel = add_cost_per_sqft(df_all_sel, bill_col="selected_bill")
+                diff_all = compute_bill_savings(
+                    df_all_sel, baseline_upgrade=0, bill_col="selected_bill"
+                )
+                sweep_savings_col = (
+                    "bill_savings_per_sqft"
+                    if is_comstock and "bill_savings_per_sqft" in diff_all.columns
+                    else "bill_savings"
+                )
+                comp_savings = (
+                    diff_all.group_by(["rate_name", "upgrade"])
+                    .agg(pl.col(sweep_savings_col).mean().alias("mean_savings"))
+                    .with_columns(
+                        pl.col("upgrade")
+                        .map_elements(
+                            lambda u: _scenario_display(_base_uri, u),
+                            return_dtype=pl.Utf8,
+                        )
+                        .alias("scenario")
+                    )
+                )
+                matrix = comp_savings.pivot(
+                    values="mean_savings", index="scenario", on="rate_name"
+                )
+                st.caption(
+                    "Mean savings vs the same-rate baseline — what each "
+                    "measure saves under each rate design "
+                    + ("($/ft²)." if is_comstock else "($ per building).")
+                )
+            rate_cols = [c for c in matrix.columns if c != "scenario"]
+            st.dataframe(
+                matrix.to_pandas(),
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    c: st.column_config.NumberColumn(format=matrix_fmt)
+                    for c in rate_cols
+                },
+            )
+        except Exception as exc:
+            st.error(f"Rate comparison error: {exc}")
 
     st.divider()
 

@@ -26,8 +26,13 @@ from buildstock_rate_impact_calculator.ui.applicability import (
 )
 
 
-def _urdb_key_required(rate_assignments: dict, rate_library: dict) -> bool:
-    for rate_name in rate_assignments.values():
+def _urdb_key_required(
+    rate_assignments: dict,
+    rate_library: dict,
+    comparison_rates: list[str] | None = None,
+) -> bool:
+    rate_names = list(rate_assignments.values()) + list(comparison_rates or [])
+    for rate_name in rate_names:
         if not rate_name:
             continue
         rate_config = rate_library.get(rate_name, {})
@@ -158,6 +163,51 @@ def _build_load_records(
             }
         )
     return records
+
+
+def _bill_upgrade_under_rates(
+    load_records: list,
+    variants: list[tuple[str, dict, bool]],
+    tracker: ProgressTracker | None = None,
+) -> pl.DataFrame:
+    """Bill one upgrade's load records under each rate variant.
+
+    Args:
+        load_records: Records for ``UtilityBillCalculator.calculate_batch_bills``.
+        variants: ``(rate_name, rate_config, is_primary)`` tuples — the primary
+            assigned rate first, then any comparison (rate-sweep) rates.
+        tracker: Optional progress tracker; advanced once per (record, variant)
+            so the active phase's total should be
+            ``len(load_records) × len(variants)``.
+
+    Returns:
+        Concatenated results with ``rate_name`` and ``is_primary`` columns
+        stamped on every row (single-variant runs included, so the schema is
+        stable whether or not a sweep is configured).
+    """
+    from buildstock_rate_impact_calculator.billing.calculator import (
+        UtilityBillCalculator,
+    )
+
+    progress_cb = None
+    if tracker is not None:
+
+        def progress_cb(done: int, total: int) -> None:
+            tracker.advance(1, message=f"Calculated {done:,}/{total:,} bills")
+
+    frames: list[pl.DataFrame] = []
+    for rate_name, rate_config, is_primary in variants:
+        calc = UtilityBillCalculator()
+        result_df = calc.calculate_batch_bills(
+            load_records, rate_config, progress_cb=progress_cb
+        )
+        frames.append(
+            result_df.with_columns(
+                pl.lit(rate_name).alias("rate_name"),
+                pl.lit(is_primary).alias("is_primary"),
+            )
+        )
+    return pl.concat(frames)
 
 
 def _calculate_fuel_bills(
@@ -403,10 +453,16 @@ def _run_pipeline(
     resolved_rate_assignments: dict,
     resolved_fuel_rate_assignments: dict,
     preloaded_metadata: pl.DataFrame | None = None,
+    resolved_comparison_rates: list[tuple[str, dict]] | None = None,
 ) -> None:
     """
     Background thread: download timeseries then calculate bills.
     Writes results into result_store["df"] on completion.
+
+    ``resolved_rate_assignments`` maps scenario key → ``(rate_name,
+    rate_dict)``. ``resolved_comparison_rates`` holds extra ``(name, dict)``
+    electricity rates every scenario is additionally billed under (the rate
+    sweep); load records are reused across variants.
 
     ``preloaded_metadata`` is the session-cached metadata frame resolved on
     the main thread; passing it avoids re-reading the projected metadata cache
@@ -415,9 +471,6 @@ def _run_pipeline(
     try:
         from buildstock_rate_impact_calculator.data.buildstock_manager import (
             BuildStockDataManager,
-        )
-        from buildstock_rate_impact_calculator.billing.calculator import (
-            UtilityBillCalculator,
         )
 
         output_dir = app_state.output_dir
@@ -628,16 +681,18 @@ def _run_pipeline(
         # ── calculate electricity bills ───────────────────────────────────────
         load_column = mgr.config.default_load_column
         scalar_weight = app_state.resstock_weight  # None for ComStock
+        comparison = list(resolved_comparison_rates or [])
         all_results = []
 
         for upgrade_id in app_state.selected_upgrades:
             scenario_key = _scenario_key(upgrade_id)
-            rate_config = resolved_rate_assignments.get(scenario_key)
-            if rate_config is None:
+            rate_entry = resolved_rate_assignments.get(scenario_key)
+            if rate_entry is None:
                 tracker.log(
                     f"No electricity rate assigned for {scenario_key}, skipping."
                 )
                 continue
+            primary_name, rate_config = rate_entry
 
             applicable_set = set(upgrade_applicable_ids.get(upgrade_id, building_ids))
 
@@ -682,19 +737,17 @@ def _run_pipeline(
                 )
                 continue
 
+            # Primary assigned rate first, then comparison (sweep) rates —
+            # the same load records are reused for every variant.
+            variants = [(primary_name, rate_config, True)] + [
+                (n, rc, False) for n, rc in comparison if n != primary_name
+            ]
             tracker.start_phase(
                 f"Calculating electricity bills — upgrade {upgrade_id}",
-                total=len(load_records),
+                total=len(load_records) * len(variants),
             )
             try:
-                calc = UtilityBillCalculator()
-                result_df = calc.calculate_batch_bills(
-                    load_records,
-                    rate_config,
-                    progress_cb=lambda done, total: tracker.advance(
-                        1, message=f"Calculated {done:,}/{total:,} bills"
-                    ),
-                )
+                result_df = _bill_upgrade_under_rates(load_records, variants, tracker)
                 # Tag each building with its applicability status for this upgrade
                 result_df = result_df.with_columns(
                     pl.col("bldg_id").is_in(list(applicable_set)).alias("applicable")
@@ -955,7 +1008,11 @@ def render_run_page(app_state: AppState) -> None:
     is_running = thread is not None and thread.is_alive()
 
     # ── API key pre-flight check ──────────────────────────────────────────────
-    needs_urdb = _urdb_key_required(app_state.rate_assignments, app_state.rate_library)
+    needs_urdb = _urdb_key_required(
+        app_state.rate_assignments,
+        app_state.rate_library,
+        comparison_rates=app_state.comparison_rates,
+    )
     api_key_available = bool(app_state.urdb_api_key or os.getenv("OPENEI_API_KEY"))
     if needs_urdb and not api_key_available:
         st.error(
@@ -988,11 +1045,18 @@ def render_run_page(app_state: AppState) -> None:
             # Resolve rate names → full dicts before handing off to background thread
             _rate_lib = app_state.rate_library
             _fuel_lib = app_state.fuel_rate_library
+            # Scenario key → (rate name, rate dict); the name is stamped onto
+            # results as ``rate_name`` for the rate sweep.
             _resolved_rates = {
-                sk: _rate_lib[name]
+                sk: (name, _rate_lib[name])
                 for sk, name in app_state.rate_assignments.items()
                 if name and name in _rate_lib
             }
+            _resolved_comparison = [
+                (name, _rate_lib[name])
+                for name in (app_state.comparison_rates or [])
+                if name in _rate_lib
+            ]
             _resolved_fuel = {
                 sk: {
                     ft: _fuel_lib.get(name) if name else None
@@ -1009,6 +1073,7 @@ def render_run_page(app_state: AppState) -> None:
                     _resolved_rates,
                     _resolved_fuel,
                     _preloaded_metadata,
+                    _resolved_comparison,
                 ),
                 daemon=True,
             )

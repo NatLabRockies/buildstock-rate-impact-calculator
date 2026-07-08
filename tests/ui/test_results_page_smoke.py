@@ -15,8 +15,13 @@ from streamlit.testing.v1 import AppTest
 
 
 def _comstock_results_df() -> pl.DataFrame:
-    """Two buildings × two upgrades, ComStock-shaped (weighted bills)."""
-    return pl.DataFrame(
+    """Two buildings × two upgrades, ComStock-shaped (weighted bills).
+
+    Includes a two-rate sweep (Phase 7): the primary "Test Elec" rows plus a
+    non-primary "Rate B" variant with 20% higher electricity bills. Sections
+    other than Rate Comparison must report primary-only values.
+    """
+    base = pl.DataFrame(
         {
             "bldg_id": [1, 2, 1, 2],
             "upgrade": [0, 0, 1, 1],
@@ -38,8 +43,16 @@ def _comstock_results_df() -> pl.DataFrame:
             "annual_demand_charge": [10_000.0, 40_000.0, 8_000.0, 30_000.0],
             "annual_min_charge": [0.0, 0.0, 0.0, 0.0],
             "peak_demand_kw": [50.0, 160.0, 40.0, 120.0],
+            "rate_name": ["Test Elec"] * 4,
+            "is_primary": [True] * 4,
         }
     )
+    sweep_variant = base.with_columns(
+        pl.lit("Rate B").alias("rate_name"),
+        pl.lit(False).alias("is_primary"),
+        (pl.col("annual_bill") * 1.2).alias("annual_bill"),
+    )
+    return pl.concat([base, sweep_variant])
 
 
 def _resstock_results_df() -> pl.DataFrame:
@@ -178,6 +191,18 @@ class TestComStockResultsPage:
         """Energy burden is a ResStock-only view (no income data in ComStock)."""
         subheaders = [s.value for s in comstock_page.subheader]
         assert "Energy Burden" not in subheaders
+
+    def test_rate_comparison_section_present(self, comstock_page: AppTest) -> None:
+        """Phase 7: two rates in the frame → Rate Comparison matrix renders."""
+        subheaders = [s.value for s in comstock_page.subheader]
+        assert "Rate Comparison" in subheaders
+
+    def test_rate_comparison_savings_view_renders(self, comstock_page: AppTest) -> None:
+        at = comstock_page
+        at.radio(key="rate_comparison_view").set_value("Mean savings")
+        at.run()
+        assert not at.exception
+        assert len(at.error) == 0
 
     def test_peak_demand_section_present(self, comstock_page: AppTest) -> None:
         subheaders = [s.value for s in comstock_page.subheader]

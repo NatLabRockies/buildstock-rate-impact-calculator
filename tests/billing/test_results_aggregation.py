@@ -457,6 +457,30 @@ class TestComputeBillSavings:
             vals = out["bill_savings_per_sqft"].to_list()
             assert all(v is None or math.isnan(v) for v in vals)
 
+    def test_two_rate_savings_use_same_rate_baseline(self) -> None:
+        """Phase 7: with rate_name on the frame, savings are computed within
+        each rate (baseline under rate R − upgrade under rate R)."""
+        df = pl.DataFrame(
+            {
+                "bldg_id": [1, 1, 1, 1],
+                "upgrade": [0, 1, 0, 1],
+                "rate_name": ["Rate A", "Rate A", "Rate B", "Rate B"],
+                # Rate A: 1000 → 800 (saves 200); Rate B: 1500 → 1400 (saves 100)
+                "annual_bill": [1000.0, 800.0, 1500.0, 1400.0],
+                "weight": [1.0, 1.0, 1.0, 1.0],
+            }
+        )
+        out = compute_bill_savings(df, baseline_upgrade=0).sort("rate_name")
+        assert out.height == 2
+        assert out["baseline_bill"].to_list() == [
+            pytest.approx(1000.0),
+            pytest.approx(1500.0),
+        ]
+        assert out["bill_savings"].to_list() == [
+            pytest.approx(200.0),
+            pytest.approx(100.0),
+        ]
+
     def test_custom_bill_col(self) -> None:
         """Savings can be computed on the selected-sources bill column."""
         df = with_selected_bill(
