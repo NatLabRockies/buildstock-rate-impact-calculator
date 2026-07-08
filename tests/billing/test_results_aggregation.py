@@ -47,6 +47,11 @@ def _resstock_df() -> pl.DataFrame:
             "weight": [100.0, 100.0, 100.0, 100.0],
             "sqft": [None, None, None, None],
             "_row_uid": ["1", "2", "1", "2"],
+            "annual_fixed_charge": [60.0, 60.0, 60.0, 60.0],
+            "annual_energy_charge": [900.0, 1900.0, 700.0, 1400.0],
+            "annual_demand_charge": [40.0, 40.0, 40.0, 40.0],
+            "annual_min_charge": [0.0, 0.0, 0.0, 0.0],
+            "peak_demand_kw": [3.0, 5.0, 2.0, 4.0],
         }
     )
 
@@ -69,6 +74,13 @@ def _comstock_df() -> pl.DataFrame:
             "weight": [10.0, 20.0, 10.0, 20.0],
             "sqft": [1000.0, 2000.0, 1000.0, 2000.0],
             "_row_uid": ["1_a", "2_a", "1_a", "2_a"],
+            # Weighted charge components ($1/ft² demand at baseline).
+            "annual_fixed_charge": [600.0, 1_200.0, 600.0, 1_200.0],
+            "annual_energy_charge": [39_400.0, 118_800.0, 31_400.0, 88_800.0],
+            "annual_demand_charge": [10_000.0, 40_000.0, 8_000.0, 30_000.0],
+            "annual_min_charge": [0.0, 0.0, 0.0, 0.0],
+            # Weighted peaks: per-building 5 / 4 W/ft² baseline, 4 / 3 upgrade.
+            "peak_demand_kw": [50.0, 160.0, 40.0, 120.0],
         }
     )
 
@@ -244,6 +256,88 @@ class TestSummarizeBillsGroupBy:
         df = _resstock_df()
         with pytest.raises(ValueError, match="not found"):
             summarize_bills(df, dataset_type="resstock", group_by="does_not_exist")
+
+
+# ---------------------------------------------------------------------------
+# summarize_bills — charge components + peak demand (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+class TestSummarizeBillsComponents:
+    def test_resstock_component_means_and_totals(self) -> None:
+        df = _resstock_df()
+        summary = summarize_bills(df, dataset_type="resstock").sort("upgrade")
+        # Baseline demand charge: mean of (40, 40) = 40; total = 100×40 + 100×40
+        assert summary["mean_annual_demand_charge"].to_list()[0] == pytest.approx(40.0)
+        assert summary["total_annual_demand_charge"].to_list()[0] == pytest.approx(
+            8_000.0
+        )
+        assert summary["mean_annual_fixed_charge"].to_list()[0] == pytest.approx(60.0)
+        # Energy charge baseline mean: (900 + 1900) / 2 = 1400
+        assert summary["mean_annual_energy_charge"].to_list()[0] == pytest.approx(
+            1400.0
+        )
+
+    def test_resstock_mean_peak_demand_kw(self) -> None:
+        df = _resstock_df()
+        summary = summarize_bills(df, dataset_type="resstock").sort("upgrade")
+        # Baseline: (3 + 5) / 2 = 4; upgrade: (2 + 4) / 2 = 3
+        peaks = summary["mean_peak_demand_kw"].to_list()
+        assert peaks[0] == pytest.approx(4.0)
+        assert peaks[1] == pytest.approx(3.0)
+
+    def test_comstock_component_per_sqft_and_totals(self) -> None:
+        df = _comstock_df()
+        summary = summarize_bills(df, dataset_type="comstock").sort("upgrade")
+        # Baseline demand $/ft²: 10000/(10×1000)=1.0, 40000/(20×2000)=1.0 → 1.0
+        # Upgrade: 8000/10000=0.8, 30000/40000=0.75 → mean 0.775
+        vals = summary["mean_annual_demand_charge_per_sqft"].to_list()
+        assert vals[0] == pytest.approx(1.0)
+        assert vals[1] == pytest.approx(0.775)
+        totals = summary["total_annual_demand_charge"].to_list()
+        assert totals[0] == pytest.approx(50_000.0)
+        assert totals[1] == pytest.approx(38_000.0)
+
+    def test_comstock_mean_peak_w_per_sqft(self) -> None:
+        df = _comstock_df()
+        summary = summarize_bills(df, dataset_type="comstock").sort("upgrade")
+        # Baseline: 50×1000/(10×1000)=5.0, 160×1000/(20×2000)=4.0 → mean 4.5
+        # Upgrade:  40×1000/10000=4.0,   120×1000/40000=3.0     → mean 3.5
+        vals = summary["mean_peak_w_per_sqft"].to_list()
+        assert vals[0] == pytest.approx(4.5)
+        assert vals[1] == pytest.approx(3.5)
+
+    def test_absent_component_columns_are_skipped(self) -> None:
+        """Older frames without the Phase-1 columns still summarize cleanly."""
+        df = _resstock_df().drop(
+            [
+                "annual_fixed_charge",
+                "annual_energy_charge",
+                "annual_demand_charge",
+                "annual_min_charge",
+                "peak_demand_kw",
+            ]
+        )
+        summary = summarize_bills(df, dataset_type="resstock")
+        assert "mean_annual_demand_charge" not in summary.columns
+        assert "mean_peak_demand_kw" not in summary.columns
+
+
+class TestSummarizeBillsGroupByList:
+    def test_group_by_accepts_list(self) -> None:
+        df = _resstock_df().with_columns(
+            pl.Series("a", ["x", "x", "x", "x"]),
+            pl.Series("b", ["y", "z", "y", "z"]),
+        )
+        summary = summarize_bills(df, dataset_type="resstock", group_by=["a", "b"])
+        assert {"a", "b", "upgrade"}.issubset(summary.columns)
+        # 1 a-value × 2 b-values × 2 upgrades = 4 rows
+        assert summary.height == 4
+
+    def test_group_by_list_unknown_column_raises(self) -> None:
+        df = _resstock_df()
+        with pytest.raises(ValueError, match="not found"):
+            summarize_bills(df, dataset_type="resstock", group_by=["nope"])
 
 
 # ---------------------------------------------------------------------------

@@ -35,6 +35,14 @@ BILL_SOURCE_LABELS: dict[str, str] = {
     "fuel_oil_bill": "Fuel Oil",
 }
 
+# PySAM electricity-bill charge components (Phase 1); electricity-only.
+_COMPONENT_COLUMNS = (
+    "annual_fixed_charge",
+    "annual_energy_charge",
+    "annual_demand_charge",
+    "annual_min_charge",
+)
+
 # Non-grouping, non-bill metadata columns excluded from the group-by selector
 _META_COLUMNS = frozenset(
     {
@@ -181,6 +189,16 @@ def _summarize_bills_resstock(
             agg_exprs.append(
                 (pl.col(fuel_col) * pl.col("weight")).sum().alias(f"total_{fuel_col}")
             )
+    # Electricity charge components (Phase 1): per-building means + weighted
+    # totals, mirroring the per-source bill treatment above.
+    for comp_col in _COMPONENT_COLUMNS:
+        if comp_col in df.columns:
+            agg_exprs.append(pl.col(comp_col).mean().alias(f"mean_{comp_col}"))
+            agg_exprs.append(
+                (pl.col(comp_col) * pl.col("weight")).sum().alias(f"total_{comp_col}")
+            )
+    if "peak_demand_kw" in df.columns:
+        agg_exprs.append(pl.col("peak_demand_kw").mean().alias("mean_peak_demand_kw"))
     return df.group_by(group_keys).agg(agg_exprs).sort(group_keys)
 
 
@@ -224,13 +242,37 @@ def _summarize_bills_comstock(
                 _per_sqft_expr(bill_col).mean().alias(f"mean_{src}_per_sqft")
             )
             agg_exprs.append(pl.col(bill_col).sum().alias(f"total_{src}"))
+    # Electricity charge components (Phase 1): ComStock rows are weighted
+    # dollars, so per-building means are reported as $/ft²; totals are
+    # direct sums (already weighted).
+    for comp_col in _COMPONENT_COLUMNS:
+        if comp_col in df.columns:
+            agg_exprs.append(
+                _per_sqft_expr(comp_col).mean().alias(f"mean_{comp_col}_per_sqft")
+            )
+            agg_exprs.append(pl.col(comp_col).sum().alias(f"total_{comp_col}"))
+    if "peak_demand_kw" in df.columns:
+        # peak_demand_kw is a weighted quantity (load × weight went into
+        # PySAM); dividing by weight × sqft gives per-building W/ft².
+        denom = pl.col("weight") * pl.col("sqft")
+        peak_w_per_sqft = (
+            pl.when(
+                pl.col("peak_demand_kw").is_not_null()
+                & pl.col("weight").is_not_null()
+                & pl.col("sqft").is_not_null()
+                & (denom > 0)
+            )
+            .then(pl.col("peak_demand_kw") * 1000.0 / denom)
+            .otherwise(None)
+        )
+        agg_exprs.append(peak_w_per_sqft.mean().alias("mean_peak_w_per_sqft"))
     return df.group_by(group_keys).agg(agg_exprs).sort(group_keys)
 
 
 def summarize_bills(
     results_df: pl.DataFrame,
     dataset_type: str,
-    group_by: Optional[str] = None,
+    group_by: Optional[str | Sequence[str]] = None,
     bill_columns: Optional[Sequence[str]] = None,
 ) -> pl.DataFrame:
     """Aggregate bill statistics by upgrade scenario, dispatched on dataset.
@@ -242,8 +284,8 @@ def summarize_bills(
         dataset_type: ``"resstock"`` or ``"comstock"``. Controls whether
             statistics are reported on per-building dollars (ResStock) or
             on per-building $/ft² (ComStock).
-        group_by: Optional metadata column name to break the summary out by
-            (e.g. ``"in.vintage"``, ``"in.state"``).
+        group_by: Optional metadata column name — or sequence of names — to
+            break the summary out by (e.g. ``"in.vintage"``, ``["rate_name"]``).
         bill_columns: Energy-source bill columns whose per-row sum drives the
             headline statistics (see :data:`BILL_SOURCE_LABELS`). Defaults to
             ``["annual_bill"]`` (electricity only). Columns absent from the
@@ -287,11 +329,11 @@ def summarize_bills(
     for col in selected[1:]:
         bill_expr = bill_expr + pl.col(col).cast(pl.Float64).fill_null(0.0)
 
-    group_keys = ["upgrade"]
-    if group_by is not None:
-        if group_by not in df.columns:
-            raise ValueError(f"group_by column '{group_by}' not found in DataFrame.")
-        group_keys = [group_by, "upgrade"]
+    group_by_list = [group_by] if isinstance(group_by, str) else list(group_by or [])
+    for col in group_by_list:
+        if col not in df.columns:
+            raise ValueError(f"group_by column '{col}' not found in DataFrame.")
+    group_keys = [*group_by_list, "upgrade"]
 
     ds = (dataset_type or "").lower()
     if ds == "comstock":

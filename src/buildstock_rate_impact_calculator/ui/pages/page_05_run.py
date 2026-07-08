@@ -755,8 +755,18 @@ def _run_pipeline(
                 total_expr = total_expr + pl.col(fc).fill_null(0.0)
             combined = combined.with_columns(total_expr.alias("total_energy_bill"))
 
-        # ── attach user-selected additional characteristic columns ───────────
-        extras = list(app_state.additional_columns or [])
+        # ── attach characteristic columns to the results frame ───────────────
+        # Union of the user's additional columns and the dataset's configured
+        # filter columns (always joined so segment breakout / energy burden
+        # work without user action), deduplicated, order preserved.
+        extras = list(
+            dict.fromkeys(
+                [
+                    *(app_state.additional_columns or []),
+                    *(mgr.config.filter_columns or []),
+                ]
+            )
+        )
         extras_present = [c for c in extras if c in metadata.columns]
         if extras_present:
             bldg_col = mgr.config.building_id_column
