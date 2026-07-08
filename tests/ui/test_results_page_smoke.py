@@ -293,6 +293,12 @@ class TestResStockResultsPage:
         assert len(at.error) == 0
         assert _buildings_metric(at) == "1"
 
+    def test_small_sample_guardrail_banner(self, resstock_page: AppTest) -> None:
+        """Phase 9: fewer than MIN_SAMPLE_MODELS models → warning banner."""
+        warnings = " ".join(w.value for w in resstock_page.warning)
+        assert "building models" in warnings
+        assert "unreliable" in warnings
+
     def test_winners_losers_metrics_shown(self, resstock_page: AppTest) -> None:
         """Phase 4: the savings section reports weighted saver/loser shares."""
         md_values = " ".join(m.value for m in resstock_page.markdown)

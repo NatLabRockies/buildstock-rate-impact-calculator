@@ -305,6 +305,15 @@ def render_building_filter_page(app_state: AppState) -> None:
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Matching Buildings", f"{app_state.building_count:,}")
+        from buildstock_rate_impact_calculator.billing.results import (
+            MIN_SAMPLE_MODELS,
+        )
+
+        if 0 < app_state.building_count < MIN_SAMPLE_MODELS:
+            st.warning(
+                f"⚠ Only {app_state.building_count} building models match — "
+                "weighted statistics may be unreliable."
+            )
     with col2:
         st.metric("Active Filters", total_filter_count)
     with col3:

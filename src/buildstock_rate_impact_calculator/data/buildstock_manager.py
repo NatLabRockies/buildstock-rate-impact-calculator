@@ -87,6 +87,9 @@ class DatasetConfig:
     # Household income bin column (ResStock only) used for energy-burden
     # reporting; None when the dataset has no income characteristic.
     income_column: Optional[str] = None
+    # Categorical column used to stratify fast-preview sampling; falls back
+    # to the state column (else a single stratum) when absent from a frame.
+    preview_stratify_column: Optional[str] = None
     # Sub-state geographic metadata trees. ComStock metadata is only usable
     # from the non-aggregate by_state_and_county files (per-row weights valid
     # for bill calculations). Maps geo level ('county' | 'puma') to a path
@@ -239,6 +242,7 @@ class BuildStockDataManager:
             ],
             income_column="in.income_recs_2020",
             electricity_energy_column="out.electricity.total.energy_consumption.kwh",
+            preview_stratify_column="in.geometry_building_type_recs",
         ),
         "resstock_2025_release_1": DatasetConfig(
             base_uri="https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/2025/resstock_amy2018_release_1",
@@ -274,6 +278,7 @@ class BuildStockDataManager:
             ],
             income_column="in.income_recs_2020",
             electricity_energy_column="out.electricity.total.energy_consumption..kwh",
+            preview_stratify_column="in.geometry_building_type_recs",
         ),
         "comstock_2024_release_2": DatasetConfig(
             base_uri="https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/2024/comstock_amy2018_release_2",
@@ -308,6 +313,7 @@ class BuildStockDataManager:
                 "out.electricity.total.energy_consumption..kwh",
             ],
             electricity_energy_column="out.electricity.total.energy_consumption..kwh",
+            preview_stratify_column="in.comstock_building_type",
             geo_metadata_paths={
                 # Non-aggregate full metadata only: per-row weights, bldg_id
                 # may repeat. PUMA is intentionally unsupported for ComStock.
@@ -353,6 +359,7 @@ class BuildStockDataManager:
                 "out.electricity.total.energy_consumption..kwh",
             ],
             electricity_energy_column="out.electricity.total.energy_consumption..kwh",
+            preview_stratify_column="in.comstock_building_type",
             geo_metadata_paths={
                 # Non-aggregate full metadata only: per-row weights, bldg_id
                 # may repeat. PUMA is intentionally unsupported for ComStock.
@@ -669,6 +676,67 @@ class BuildStockDataManager:
         value = scan.select("weight").limit(1).collect()[0, 0]
         self._dataset_weight = float(value)
         return self._dataset_weight
+
+    def sample_metadata_stratified(
+        self,
+        metadata_df: pl.DataFrame,
+        n_per_stratum: int,
+        seed: int = 42,
+    ) -> pl.DataFrame:
+        """Stratified fast-preview sample of a metadata frame.
+
+        Groups by the config's ``preview_stratify_column`` (falling back to
+        the state column, else a single stratum) and keeps at most
+        ``n_per_stratum`` rows per stratum (deterministic for a given seed).
+        Each kept row gains ``_sample_scale`` — the stratum's weight sum
+        divided by the sampled weight sum (1.0 when the stratum was fully
+        kept, or row-count ratio when no ``weight`` column exists) — so
+        ``weight × _sample_scale`` keeps weighted totals unbiased.
+        """
+        strat_col = self.config.preview_stratify_column
+        if not strat_col or strat_col not in metadata_df.columns:
+            strat_col = (
+                self.config.state_column
+                if self.config.state_column in metadata_df.columns
+                else None
+            )
+        if strat_col is None:
+            df = metadata_df.with_columns(pl.lit("_all").alias("_stratum"))
+        else:
+            df = metadata_df.with_columns(
+                pl.col(strat_col).cast(pl.Utf8).fill_null("_null").alias("_stratum")
+            )
+
+        has_weight = "weight" in df.columns
+        sampled_parts: List[pl.DataFrame] = []
+        scales: List[float] = []
+        for part in df.partition_by("_stratum"):
+            n_keep = min(int(n_per_stratum), part.height)
+            sampled = (
+                part if part.height <= n_keep else part.sample(n=n_keep, seed=seed)
+            )
+            if has_weight:
+                total_w = float(part["weight"].sum() or 0.0)
+                kept_w = float(sampled["weight"].sum() or 0.0)
+                scale = total_w / kept_w if kept_w > 0 else 1.0
+            else:
+                scale = part.height / sampled.height
+            scales.append(scale)
+            sampled_parts.append(
+                sampled.with_columns(pl.lit(float(scale)).alias("_sample_scale"))
+            )
+
+        out = pl.concat(sampled_parts).drop("_stratum")
+        self.logger.info(
+            "Preview sampling kept %s of %s rows across %s strata "
+            "(scale range %.3f–%.3f).",
+            f"{out.height:,}",
+            f"{metadata_df.height:,}",
+            len(sampled_parts),
+            min(scales),
+            max(scales),
+        )
+        return out
 
     def get_app_metadata_columns(
         self, additional_columns: Optional[List[str]] = None

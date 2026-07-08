@@ -275,6 +275,22 @@ def render_results_page(app_state: AppState) -> None:
             df = df.filter(pl.col("rate_eligible").fill_null(True))
             df_all = df_all.filter(pl.col("rate_eligible").fill_null(True))
 
+    # ── Preview / small-sample guardrails (Phase 9) ───────────────────────────
+    if result_store.get("preview"):
+        st.warning(
+            "⚡ Preview run — a stratified sample of buildings was billed; "
+            "totals are re-scaled estimates and per-building statistics are "
+            "sample estimates."
+        )
+    from buildstock_rate_impact_calculator.billing.results import MIN_SAMPLE_MODELS
+
+    _n_models = df["bldg_id"].n_unique()
+    if _n_models < MIN_SAMPLE_MODELS:
+        st.warning(
+            f"⚠ Only {_n_models} building models in these results — weighted "
+            "statistics may be unreliable."
+        )
+
     # ── Navigate-to-results banner ────────────────────────────────────────────
     if st.session_state.pop("_navigate_to_results", False):
         st.info("📂 Results loaded from project — displaying below.")

@@ -24,6 +24,9 @@ from buildstock_rate_impact_calculator.ui.components.progress_tracker import (
 from buildstock_rate_impact_calculator.ui.applicability import (
     render_applicability_table as _render_applicability_table,
 )
+from buildstock_rate_impact_calculator.billing.results import (
+    MIN_SAMPLE_MODELS as _MIN_SAMPLE_MODELS,
+)
 
 
 def _urdb_key_required(
@@ -149,6 +152,9 @@ def _build_load_records(
             load_array = values * weight
         else:
             weight = float(scalar_weight) if scalar_weight is not None else 1.0
+            # Preview sampling re-scales the scalar weight per row so
+            # weighted totals stay unbiased (1.0 outside preview runs).
+            weight *= float(row.get("_sample_scale") or 1.0)
             sqft_val = None
             load_array = values
 
@@ -536,6 +542,28 @@ def _run_pipeline(
                 f"≤ {MIN_WEIGHTED_AREA_SQFT:g} ft²."
             )
 
+        # ── fast preview sampling (Phase 9) ──────────────────────────────────
+        preview_on = bool(getattr(app_state, "preview_mode", False))
+        result_store["preview"] = preview_on
+        if preview_on:
+            _n_per = int(getattr(app_state, "preview_n_per_stratum", 20) or 20)
+            _rows_before_preview = metadata.height
+            metadata = mgr.sample_metadata_stratified(metadata, _n_per)
+            tracker.log(
+                f"⚡ Preview mode: sampled {metadata.height:,} of "
+                f"{_rows_before_preview:,} rows ({_n_per}/stratum); weights "
+                "re-scaled so totals stay unbiased."
+            )
+            if mgr.config.dataset_type == "comstock" and "weight" in metadata.columns:
+                # Fold the stratum scale into the row weight before load
+                # records are built — every weighted quantity (bills, $/ft²,
+                # totals) flows from this one column.
+                metadata = metadata.with_columns(
+                    (pl.col("weight") * pl.col("_sample_scale")).alias("weight")
+                ).drop("_sample_scale")
+            # ResStock keeps _sample_scale on the frame: _build_load_records
+            # folds it into the per-record scalar weight.
+
         # Stable per-row identifier (ComStock: one bldg_id may span multiple
         # geographic aggregates, each with a different weight). Used as a join
         # key between electricity and fuel-bill DataFrames.
@@ -547,6 +575,11 @@ def _run_pipeline(
         tracker.log(
             f"Metadata loaded — {len(building_ids):,} buildings match the current filters."
         )
+        if len(building_ids) < _MIN_SAMPLE_MODELS:
+            tracker.log(
+                f"⚠ Only {len(building_ids):,} building models match — "
+                "weighted statistics may be unreliable."
+            )
 
         if tracker.is_cancelled():
             tracker.done(message="Cancelled before download.")
@@ -1052,6 +1085,32 @@ def render_run_page(app_state: AppState) -> None:
             "An OpenEI API key is required: one or more rate assignments need to "
             "fetch rate data from URDB during the run. Enter your API key in the "
             "sidebar before starting."
+        )
+
+    # ── Fast preview sampling (Phase 9) ───────────────────────────────────────
+    preview_on = st.toggle(
+        "⚡ Fast preview (stratified sample)",
+        value=app_state.preview_mode,
+        key="preview_mode_toggle",
+        help=(
+            "Bill a stratified sample of the filtered buildings instead of "
+            "all of them — iterate on rate designs in seconds."
+        ),
+    )
+    app_state.preview_mode = bool(preview_on)
+    if preview_on:
+        app_state.preview_n_per_stratum = int(
+            st.number_input(
+                "Buildings per stratum",
+                min_value=1,
+                max_value=500,
+                value=int(app_state.preview_n_per_stratum or 20),
+                key="preview_n_per_stratum_input",
+            )
+        )
+        st.caption(
+            "Weighted totals are re-scaled to stay unbiased; per-building "
+            "means and medians are stratified-sample estimates."
         )
 
     # ── Start button ──────────────────────────────────────────────────────────
