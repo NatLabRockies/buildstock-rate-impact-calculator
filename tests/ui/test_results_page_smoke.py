@@ -225,3 +225,10 @@ class TestResStockResultsPage:
         subheaders = [s.value for s in resstock_page.subheader]
         assert "Monthly Bill Profile" in subheaders
         assert "Peak Demand" in subheaders
+
+    def test_winners_losers_metrics_shown(self, resstock_page: AppTest) -> None:
+        """Phase 4: the savings section reports weighted saver/loser shares."""
+        md_values = " ".join(m.value for m in resstock_page.markdown)
+        assert "of buildings save" in md_values
+        # Both fixture buildings save (>$1) under upgrade 1.
+        assert "100% of buildings save" in md_values

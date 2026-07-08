@@ -141,6 +141,73 @@ def render_bill_distribution(
     return box.interactive()
 
 
+def render_savings_histogram(
+    diff_df: pl.DataFrame,
+    savings_col: str = "bill_savings",
+    value_format: str = "$.0f",
+    weight_col: str = "weight",
+    scenario_col: str = "scenario",
+    x_axis_title: str = "Annual Bill Savings ($)",
+) -> alt.Chart:
+    """Weighted histogram of per-building bill savings.
+
+    Args:
+        diff_df: Frame from ``compute_bill_savings`` (savings + weight rows).
+        savings_col: Numeric savings column to bin on the x-axis.
+        value_format: D3 numeric format for the x-axis labels.
+        weight_col: Weight column summed on the y-axis ("buildings
+            represented"); a constant 1.0 is used when absent.
+        scenario_col: Scenario label column; the chart is faceted by it when
+            more than one scenario is present.
+        x_axis_title: X-axis label.
+
+    Returns:
+        Altair Chart object.
+    """
+    df = diff_df.filter(pl.col(savings_col).is_not_null())
+    if weight_col not in df.columns:
+        df = df.with_columns(pl.lit(1.0).alias(weight_col))
+    keep = [savings_col, weight_col] + (
+        [scenario_col] if scenario_col in df.columns else []
+    )
+    pandas_df = df.select(keep).to_pandas()
+
+    hist = (
+        alt.Chart(pandas_df)
+        .mark_bar()
+        .encode(
+            x=alt.X(
+                f"{savings_col}:Q",
+                bin=alt.Bin(maxbins=40),
+                title=x_axis_title,
+                axis=alt.Axis(format=value_format),
+            ),
+            y=alt.Y(f"sum({weight_col}):Q", title="Buildings represented"),
+            tooltip=[
+                alt.Tooltip(
+                    f"{savings_col}:Q",
+                    bin=alt.Bin(maxbins=40),
+                    title=x_axis_title,
+                    format=value_format,
+                ),
+                alt.Tooltip(f"sum({weight_col}):Q", title="Buildings represented"),
+            ],
+        )
+    )
+
+    n_scenarios = (
+        pandas_df[scenario_col].nunique() if scenario_col in pandas_df.columns else 1
+    )
+    if n_scenarios > 1:
+        return hist.facet(
+            facet=alt.Facet(f"{scenario_col}:N", title="Scenario"),
+            columns=3,
+        ).properties(title="Savings Distribution")
+    return hist.properties(
+        title="Savings Distribution", width=600, height=300
+    ).interactive()
+
+
 def render_monthly_profile(
     long_df: pl.DataFrame,
     value_col: str = "value",

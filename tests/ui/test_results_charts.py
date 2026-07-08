@@ -24,6 +24,7 @@ from buildstock_rate_impact_calculator.ui.components.charts import (
     render_bill_comparison_bar,
     render_bill_stack_bar,
     render_monthly_profile,
+    render_savings_histogram,
 )
 
 
@@ -195,6 +196,59 @@ class TestRenderBillComparisonBarFormats:
         formats = [t.get("format") for t in tooltip if t.get("format")]
         _ = y_enc  # noqa: F841 — keep the inspection for documentation
         assert "$.0f" in formats
+
+
+# ---------------------------------------------------------------------------
+# render_savings_histogram (Phase 4)
+# ---------------------------------------------------------------------------
+
+
+class TestRenderSavingsHistogram:
+    def _diff_df(self, scenarios: int = 1) -> pl.DataFrame:
+        frames = []
+        for i in range(scenarios):
+            frames.append(
+                pl.DataFrame(
+                    {
+                        "bldg_id": [1, 2, 3],
+                        "upgrade": [i + 1] * 3,
+                        "scenario": [f"Upgrade {i + 1}"] * 3,
+                        "bill_savings": [100.0, -50.0, 20.0],
+                        "weight": [10.0, 20.0, 30.0],
+                    }
+                )
+            )
+        return pl.concat(frames)
+
+    def test_bins_savings_on_x(self) -> None:
+        spec = render_savings_histogram(self._diff_df()).to_dict()
+        x_enc = spec["encoding"]["x"]
+        assert x_enc["field"] == "bill_savings"
+        assert x_enc["bin"]["maxbins"] == 40
+
+    def test_y_sums_weight(self) -> None:
+        spec = render_savings_histogram(self._diff_df()).to_dict()
+        y_enc = spec["encoding"]["y"]
+        assert y_enc["aggregate"] == "sum"
+        assert y_enc["field"] == "weight"
+        assert y_enc["title"] == "Buildings represented"
+
+    def test_facets_by_scenario_when_multiple(self) -> None:
+        spec = render_savings_histogram(self._diff_df(scenarios=2)).to_dict()
+        assert spec["facet"]["field"] == "scenario"
+        assert spec["columns"] == 3
+
+    def test_missing_weight_column_uses_constant(self) -> None:
+        df = self._diff_df().drop("weight")
+        chart = render_savings_histogram(df)
+        assert (chart.data["weight"] == 1.0).all()
+
+    def test_null_savings_rows_dropped(self) -> None:
+        df = self._diff_df().with_columns(
+            pl.Series("bill_savings", [100.0, None, 20.0])
+        )
+        chart = render_savings_histogram(df)
+        assert len(chart.data) == 2
 
 
 # ---------------------------------------------------------------------------

@@ -254,6 +254,7 @@ def render_results_page(app_state: AppState) -> None:
         compute_bill_savings,
         format_for_export,
         monthly_bills_long,
+        savings_shares,
         summarize_bills,
         with_selected_bill,
     )
@@ -262,6 +263,7 @@ def render_results_page(app_state: AppState) -> None:
         render_bill_distribution,
         render_bill_stack_bar,
         render_monthly_profile,
+        render_savings_histogram,
         melt_fuels_to_long,
     )
 
@@ -611,6 +613,25 @@ def render_results_page(app_state: AppState) -> None:
             display_fmt = per_sqft_fmt if use_per_sqft else dollar_fmt  # charts
             table_display_fmt = table_per_sqft_fmt if use_per_sqft else table_dollar_fmt
 
+            # Winners/losers metrics row: weighted share of buildings whose
+            # dollar bill goes down / up by more than $1 under each upgrade.
+            try:
+                shares = savings_shares(diff_df, savings_col="bill_savings")
+                share_lines = []
+                for share_row in shares.sort("upgrade").iter_rows(named=True):
+                    label = _scenario_display(_base_uri, share_row["upgrade"])
+                    if share_row["pct_saving"] is None:
+                        continue
+                    share_lines.append(
+                        f"**{label}**: {share_row['pct_saving']:.0%} of buildings "
+                        f"save · {share_row['pct_increasing']:.0%} increase · "
+                        f"{share_row['pct_neutral']:.0%} within ±$1"
+                    )
+                if share_lines:
+                    st.markdown("  \n".join(share_lines))
+            except Exception as exc:
+                st.warning(f"Winners/losers summary error: {exc}")
+
             if savings_view == "Average":
                 value_label = (
                     "mean_bill_savings_per_sqft"
@@ -628,6 +649,14 @@ def render_results_page(app_state: AppState) -> None:
                                 "median_bill_savings_per_sqft"
                                 if use_per_sqft
                                 else "median_bill_savings"
+                            ),
+                            # Percent-of-baseline savings, scaled to 0–100 for
+                            # the printf "%.1f%%" column format.
+                            (pl.col("bill_savings_pct").mean() * 100).alias(
+                                "mean_bill_savings_pct"
+                            ),
+                            (pl.col("bill_savings_pct").median() * 100).alias(
+                                "median_bill_savings_pct"
                             ),
                             pl.col("bldg_id").count().alias("count"),
                         ]
@@ -667,6 +696,10 @@ def render_results_page(app_state: AppState) -> None:
                 sav_column_config[med_label] = st.column_config.NumberColumn(
                     format=table_display_fmt
                 )
+                for pct_label in ("mean_bill_savings_pct", "median_bill_savings_pct"):
+                    sav_column_config[pct_label] = st.column_config.NumberColumn(
+                        format="%.1f%%"
+                    )
             st.dataframe(
                 diff_summary.to_pandas(),
                 width="stretch",
@@ -722,6 +755,23 @@ def render_results_page(app_state: AppState) -> None:
                 .interactive()
             )
             st.altair_chart(diff_chart, width="stretch")
+
+            # Savings distribution histogram — the spread behind the means.
+            hist_use_per_sqft = (
+                is_comstock and "bill_savings_per_sqft" in diff_df.columns
+            )
+            hist_col = "bill_savings_per_sqft" if hist_use_per_sqft else "bill_savings"
+            hist_chart = render_savings_histogram(
+                diff_df,
+                savings_col=hist_col,
+                value_format=per_sqft_fmt if hist_use_per_sqft else dollar_fmt,
+                x_axis_title=(
+                    "Annual Bill Savings ($/ft²)"
+                    if hist_use_per_sqft
+                    else "Annual Bill Savings ($)"
+                ),
+            )
+            st.altair_chart(hist_chart, width="stretch")
         except Exception as exc:
             st.error(f"Bill savings error: {exc}")
 

@@ -246,10 +246,9 @@ def block_fuel_bill_expr(
 
     monthly_bill_exprs: list[pl.Expr] = []
     for monthly_kwh in monthly_kwh_exprs:
-        monthly_units = (
-            pl.max_horizontal(monthly_kwh.fill_null(0.0), pl.lit(0.0))
-            / pl.lit(kph)
-        )
+        monthly_units = pl.max_horizontal(
+            monthly_kwh.fill_null(0.0), pl.lit(0.0)
+        ) / pl.lit(kph)
         if not tiers:
             energy_charge: pl.Expr = pl.lit(0.0)
         else:
@@ -290,9 +289,7 @@ def fuel_bill_expr(
     """
     if fuel_rate_dict.get("is_block_rate", False):
         if monthly_kwh_exprs is None:
-            raise ValueError(
-                "block_fuel_bill_expr requires 12 monthly_kwh_exprs"
-            )
+            raise ValueError("block_fuel_bill_expr requires 12 monthly_kwh_exprs")
         return block_fuel_bill_expr(monthly_kwh_exprs, fuel_rate_dict)
     if annual_kwh_expr is None:
         raise ValueError("flat_fuel_bill_expr requires annual_kwh_expr")

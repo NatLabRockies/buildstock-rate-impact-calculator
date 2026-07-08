@@ -28,6 +28,7 @@ from buildstock_rate_impact_calculator.billing.results import (
     bill_source_options,
     compute_bill_savings,
     monthly_bills_long,
+    savings_shares,
     summarize_bills,
     with_selected_bill,
 )
@@ -471,6 +472,111 @@ class TestComputeBillSavings:
             pytest.approx(250.0),
             pytest.approx(600.0),
         ]
+
+
+# ---------------------------------------------------------------------------
+# bill_savings_pct + savings_shares (Phase 4)
+# ---------------------------------------------------------------------------
+
+
+class TestBillSavingsPct:
+    def test_pct_is_fraction_of_baseline(self) -> None:
+        df = _resstock_df()
+        out = compute_bill_savings(df, baseline_upgrade=0).sort("bldg_id")
+        # bldg 1: 200 / 1000 = 0.2; bldg 2: 500 / 2000 = 0.25
+        assert out["bill_savings_pct"].to_list() == [
+            pytest.approx(0.2),
+            pytest.approx(0.25),
+        ]
+
+    def test_zero_baseline_yields_null_pct(self) -> None:
+        df = pl.DataFrame(
+            {
+                "bldg_id": [1, 1],
+                "upgrade": [0, 1],
+                "annual_bill": [0.0, -50.0],
+                "weight": [1.0, 1.0],
+            }
+        )
+        out = compute_bill_savings(df, baseline_upgrade=0)
+        assert out["bill_savings_pct"].to_list() == [None]
+
+    def test_null_baseline_yields_null_pct(self) -> None:
+        df = pl.DataFrame(
+            {
+                "bldg_id": [1, 2, 2],
+                "upgrade": [1, 0, 1],
+                "annual_bill": [800.0, 1000.0, 900.0],
+                "weight": [1.0, 1.0, 1.0],
+            }
+        )
+        out = compute_bill_savings(df, baseline_upgrade=0).sort("bldg_id")
+        # bldg 1 has no baseline row → null savings and null pct
+        assert out["bill_savings_pct"].to_list()[0] is None
+        assert out["bill_savings_pct"].to_list()[1] == pytest.approx(0.1)
+
+
+class TestSavingsShares:
+    def _diff_df(self) -> pl.DataFrame:
+        """Four buildings, one upgrade: saver, loser, and two neutrals."""
+        return pl.DataFrame(
+            {
+                "bldg_id": [1, 2, 3, 4],
+                "upgrade": [1, 1, 1, 1],
+                "bill_savings": [100.0, -50.0, 0.5, -0.9],
+                "weight": [10.0, 20.0, 30.0, 40.0],
+            }
+        )
+
+    def test_weighted_shares(self) -> None:
+        shares = savings_shares(self._diff_df())
+        row = shares.row(0, named=True)
+        # Total weight 100: saver 10, loser 20, neutral 70.
+        assert row["pct_saving"] == pytest.approx(0.10)
+        assert row["pct_increasing"] == pytest.approx(0.20)
+        assert row["pct_neutral"] == pytest.approx(0.70)
+        assert row["count"] == 4
+
+    def test_threshold_band_is_neutral(self) -> None:
+        """±threshold rows are neutral even at the exact boundary."""
+        df = pl.DataFrame(
+            {
+                "bldg_id": [1, 2],
+                "upgrade": [1, 1],
+                "bill_savings": [1.0, -1.0],  # exactly at the $1 threshold
+                "weight": [1.0, 1.0],
+            }
+        )
+        row = savings_shares(df, threshold=1.0).row(0, named=True)
+        assert row["pct_saving"] == pytest.approx(0.0)
+        assert row["pct_increasing"] == pytest.approx(0.0)
+        assert row["pct_neutral"] == pytest.approx(1.0)
+
+    def test_null_savings_rows_excluded(self) -> None:
+        df = self._diff_df().with_columns(
+            pl.Series("bill_savings", [100.0, None, 0.5, -0.9])
+        )
+        row = savings_shares(df).row(0, named=True)
+        # bldg 2 (weight 20) dropped → total weight 80, saver 10/80
+        assert row["pct_saving"] == pytest.approx(10.0 / 80.0)
+        assert row["count"] == 3
+
+    def test_groups_by_rate_name_when_present(self) -> None:
+        df = pl.concat(
+            [
+                self._diff_df().with_columns(pl.lit("Rate A").alias("rate_name")),
+                self._diff_df().with_columns(pl.lit("Rate B").alias("rate_name")),
+            ]
+        )
+        shares = savings_shares(df)
+        assert shares.height == 2
+        assert set(shares["rate_name"].to_list()) == {"Rate A", "Rate B"}
+
+    def test_unweighted_when_no_weight_column(self) -> None:
+        df = self._diff_df().drop("weight")
+        row = savings_shares(df).row(0, named=True)
+        assert row["pct_saving"] == pytest.approx(0.25)
+        assert row["pct_increasing"] == pytest.approx(0.25)
 
 
 # ---------------------------------------------------------------------------

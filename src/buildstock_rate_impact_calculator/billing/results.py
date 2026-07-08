@@ -61,6 +61,7 @@ _META_COLUMNS = frozenset(
         "baseline_bill",
         "bill_diff",
         "bill_savings",
+        "bill_savings_pct",
         "bill_savings_per_sqft",
         "baseline_cost_per_sqft",
         "natural_gas_rate_name",
@@ -473,7 +474,84 @@ def compute_bill_savings(
                 "bill_savings_per_sqft"
             )
         )
-    return joined.with_columns(new_cols)
+    joined = joined.with_columns(new_cols)
+    # Fractional savings vs the baseline bill; null (not inf) when the
+    # baseline is missing or non-positive.
+    return joined.with_columns(
+        pl.when(pl.col("baseline_bill").is_not_null() & (pl.col("baseline_bill") > 0))
+        .then(pl.col("bill_savings") / pl.col("baseline_bill"))
+        .otherwise(None)
+        .alias("bill_savings_pct")
+    )
+
+
+def savings_shares(
+    diff_df: pl.DataFrame,
+    savings_col: str = "bill_savings",
+    threshold: float = 1.0,
+) -> pl.DataFrame:
+    """Weighted winner/loser shares per upgrade (and per rate when present).
+
+    Args:
+        diff_df: Frame from :func:`compute_bill_savings`.
+        savings_col: Per-row savings column to classify on.
+        threshold: Dollar dead-band — rows within ``±threshold`` count as
+            neutral rather than saving/increasing.
+
+    Returns:
+        One row per ``upgrade`` (per ``(rate_name, upgrade)`` when a
+        ``rate_name`` column exists) with weighted shares ``pct_saving``
+        (savings > threshold), ``pct_increasing`` (savings < −threshold),
+        ``pct_neutral`` (remainder), and the unweighted ``count`` of
+        contributing rows. Shares are fractions of the weight sum (null when
+        the group's weight sum is 0). Rows with a null savings value are
+        excluded.
+    """
+    group_keys = ["upgrade"]
+    if "rate_name" in diff_df.columns:
+        group_keys = ["rate_name", "upgrade"]
+
+    df = diff_df.filter(pl.col(savings_col).is_not_null())
+    if "weight" not in df.columns:
+        df = df.with_columns(pl.lit(1.0).alias("weight"))
+    w = pl.col("weight")
+
+    grouped = df.group_by(group_keys).agg(
+        [
+            pl.when(pl.col(savings_col) > threshold)
+            .then(w)
+            .otherwise(0.0)
+            .sum()
+            .alias("_w_saving"),
+            pl.when(pl.col(savings_col) < -threshold)
+            .then(w)
+            .otherwise(0.0)
+            .sum()
+            .alias("_w_increasing"),
+            w.sum().alias("_w_total"),
+            pl.col("bldg_id").count().alias("count"),
+        ]
+    )
+    total_ok = pl.col("_w_total") > 0
+    return (
+        grouped.with_columns(
+            [
+                pl.when(total_ok)
+                .then(pl.col("_w_saving") / pl.col("_w_total"))
+                .otherwise(None)
+                .alias("pct_saving"),
+                pl.when(total_ok)
+                .then(pl.col("_w_increasing") / pl.col("_w_total"))
+                .otherwise(None)
+                .alias("pct_increasing"),
+            ]
+        )
+        .with_columns(
+            (1.0 - pl.col("pct_saving") - pl.col("pct_increasing")).alias("pct_neutral")
+        )
+        .drop(["_w_saving", "_w_increasing", "_w_total"])
+        .sort(group_keys)
+    )
 
 
 def format_for_export(results_df: pl.DataFrame) -> bytes:
