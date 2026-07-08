@@ -451,7 +451,11 @@ def compute_bill_savings(
         results_df: Must contain ``bldg_id``, ``upgrade``, and ``bill_col``.
             For per-sqft savings, must also contain ``cost_per_sqft``. When
             a ``_row_uid`` column is present the baseline join also includes
-            it so ComStock per-row geographic aggregates line up.
+            it so ComStock per-row geographic aggregates line up. When the
+            frame is a rate sweep (baseline billed under more than one
+            ``rate_name``), the join also includes ``rate_name`` so savings
+            are same-rate-baseline; primary-only frames keep per-scenario
+            assigned rates comparable.
         baseline_upgrade: The upgrade ID to treat as baseline (default 0).
         bill_col: The per-row bill column to difference (default
             ``annual_bill``; pass ``selected_bill`` after
@@ -479,9 +483,19 @@ def compute_bill_savings(
         join_keys.append("_row_uid")
     # Rate-sweep frames carry one row per rate variant; joining on rate_name
     # makes savings same-rate-baseline (baseline under rate R − upgrade
-    # under rate R).
+    # under rate R). Only sweep frames qualify — detected by the baseline
+    # slice carrying multiple rate variants. A primary-only frame has one
+    # rate per scenario (the *assigned* rate, which may legitimately differ
+    # between baseline and upgrade); joining on rate_name there would match
+    # nothing and null out every savings row.
     if "rate_name" in results_df.columns:
-        join_keys.append("rate_name")
+        n_baseline_rates = (
+            results_df.filter(pl.col("upgrade") == baseline_upgrade)["rate_name"]
+            .drop_nulls()
+            .n_unique()
+        )
+        if n_baseline_rates > 1:
+            join_keys.append("rate_name")
 
     baseline_sel: list = [pl.col(bill_col).alias("baseline_bill")]
     if has_per_sqft:

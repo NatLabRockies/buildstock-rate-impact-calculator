@@ -457,6 +457,28 @@ class TestComputeBillSavings:
             vals = out["bill_savings_per_sqft"].to_list()
             assert all(v is None or math.isnan(v) for v in vals)
 
+    def test_per_scenario_rate_assignments_still_join(self) -> None:
+        """Regression: a primary-only frame where baseline and upgrade carry
+        *different assigned* rate names (one rate per scenario, no sweep)
+        must still produce savings — rate_name is only a join key when the
+        baseline itself has multiple rate variants."""
+        df = pl.DataFrame(
+            {
+                "bldg_id": [1, 2, 1, 2],
+                "upgrade": [0, 0, 1, 1],
+                "rate_name": ["Rate A", "Rate A", "Rate B", "Rate B"],
+                "annual_bill": [1000.0, 2000.0, 800.0, 1500.0],
+                "weight": [1.0, 1.0, 1.0, 1.0],
+                "_row_uid": ["1", "2", "1", "2"],
+            }
+        )
+        out = compute_bill_savings(df, baseline_upgrade=0).sort("bldg_id")
+        assert out["bill_savings"].null_count() == 0
+        assert out["bill_savings"].to_list() == [
+            pytest.approx(200.0),
+            pytest.approx(500.0),
+        ]
+
     def test_two_rate_savings_use_same_rate_baseline(self) -> None:
         """Phase 7: with rate_name on the frame, savings are computed within
         each rate (baseline under rate R − upgrade under rate R)."""
