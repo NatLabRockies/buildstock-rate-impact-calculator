@@ -66,6 +66,7 @@ def _resstock_results_df() -> pl.DataFrame:
             "annual_demand_charge": [40.0, 40.0, 40.0, 40.0],
             "annual_min_charge": [0.0, 0.0, 0.0, 0.0],
             "peak_demand_kw": [3.0, 5.0, 2.0, 4.0],
+            "in.vintage": ["1980s", "1990s", "1980s", "1990s"],
         }
     )
 
@@ -225,6 +226,16 @@ class TestResStockResultsPage:
         subheaders = [s.value for s in resstock_page.subheader]
         assert "Monthly Bill Profile" in subheaders
         assert "Peak Demand" in subheaders
+
+    def test_segment_breakout_renders(self, resstock_page: AppTest) -> None:
+        """Phase 5: selecting a segment breaks savings out without errors."""
+        at = resstock_page
+        seg_box = at.selectbox(key="savings_segment")
+        assert "in.vintage" in seg_box.options
+        seg_box.set_value("in.vintage")
+        at.run()
+        assert not at.exception
+        assert len(at.error) == 0
 
     def test_winners_losers_metrics_shown(self, resstock_page: AppTest) -> None:
         """Phase 4: the savings section reports weighted saver/loser shares."""

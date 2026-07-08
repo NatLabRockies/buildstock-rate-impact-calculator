@@ -249,12 +249,14 @@ def render_results_page(app_state: AppState) -> None:
         st.info("📂 Results loaded from project — displaying below.")
 
     from buildstock_rate_impact_calculator.billing.results import (
+        MIN_SAMPLE_MODELS,
         add_cost_per_sqft,
         bill_source_options,
         compute_bill_savings,
         format_for_export,
         monthly_bills_long,
         savings_shares,
+        segment_columns,
         summarize_bills,
         with_selected_bill,
     )
@@ -772,6 +774,60 @@ def render_results_page(app_state: AppState) -> None:
                 ),
             )
             st.altair_chart(hist_chart, width="stretch")
+
+            # Segment breakout: savings grouped by a categorical building
+            # characteristic (Phase 5). Uses the same view (Average/Total)
+            # expressions as the headline table above.
+            segments = segment_columns(diff_df)
+            if segments:
+                seg_choice = st.selectbox(
+                    "Break out savings by",
+                    ["None", *segments],
+                    key="savings_segment",
+                )
+                if seg_choice != "None":
+                    seg_keys = [seg_choice, *grp_keys]
+                    if savings_view == "Average":
+                        seg_aggs = [
+                            pl.col(savings_col).mean().alias(value_label),
+                            pl.col("bldg_id").count().alias("count"),
+                        ]
+                    else:
+                        seg_aggs = [
+                            total_expr,
+                            pl.col("bldg_id").count().alias("count"),
+                        ]
+                    seg_summary = (
+                        diff_df.group_by(seg_keys)
+                        .agg(seg_aggs)
+                        .sort([seg_choice, "upgrade"])
+                    )
+                    min_count = seg_summary["count"].min()
+                    if min_count is not None and min_count < MIN_SAMPLE_MODELS:
+                        st.caption(
+                            f"⚠ Some segments have fewer than "
+                            f"{MIN_SAMPLE_MODELS} building models — their "
+                            "statistics may be unreliable."
+                        )
+                    st.dataframe(
+                        seg_summary.to_pandas(),
+                        width="stretch",
+                        hide_index=True,
+                        column_config={
+                            value_label: st.column_config.NumberColumn(
+                                format=table_display_fmt
+                            ),
+                        },
+                    )
+                    seg_chart = render_bill_comparison_bar(
+                        seg_summary,
+                        group_col=seg_choice,
+                        bill_col=value_label,
+                        value_format=display_fmt,
+                        y_axis_title=y_title,
+                        chart_title="Bill Savings by Segment",
+                    )
+                    st.altair_chart(seg_chart, width="stretch")
         except Exception as exc:
             st.error(f"Bill savings error: {exc}")
 

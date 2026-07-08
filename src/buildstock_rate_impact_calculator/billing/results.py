@@ -43,6 +43,10 @@ _COMPONENT_COLUMNS = (
     "annual_min_charge",
 )
 
+# Below this many distinct building models, weighted statistics are shaky —
+# used for small-sample warnings across the UI.
+MIN_SAMPLE_MODELS = 30
+
 # Non-grouping, non-bill metadata columns excluded from the group-by selector
 _META_COLUMNS = frozenset(
     {
@@ -340,6 +344,20 @@ def summarize_bills(
     if ds == "comstock":
         return _summarize_bills_comstock(df, group_keys, bill_expr)
     return _summarize_bills_resstock(df, group_keys, bill_expr)
+
+
+def segment_columns(results_df: pl.DataFrame) -> list[str]:
+    """Categorical building-characteristic columns usable as segments.
+
+    Returns the sorted ``in.*`` columns whose dtype is non-numeric —
+    numeric characteristics (e.g. ``in.sqft..ft2``) make poor categorical
+    breakouts and are excluded.
+    """
+    return sorted(
+        c
+        for c in results_df.columns
+        if c.startswith("in.") and not results_df.schema[c].is_numeric()
+    )
 
 
 def monthly_bills_long(

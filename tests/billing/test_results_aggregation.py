@@ -29,6 +29,7 @@ from buildstock_rate_impact_calculator.billing.results import (
     compute_bill_savings,
     monthly_bills_long,
     savings_shares,
+    segment_columns,
     summarize_bills,
     with_selected_bill,
 )
@@ -577,6 +578,31 @@ class TestSavingsShares:
         row = savings_shares(df).row(0, named=True)
         assert row["pct_saving"] == pytest.approx(0.25)
         assert row["pct_increasing"] == pytest.approx(0.25)
+
+
+# ---------------------------------------------------------------------------
+# segment_columns (Phase 5)
+# ---------------------------------------------------------------------------
+
+
+class TestSegmentColumns:
+    def test_categorical_in_columns_included_sorted(self) -> None:
+        df = _resstock_df().with_columns(
+            pl.Series("in.vintage", ["1980s"] * 4),
+            pl.Series("in.state", ["CO"] * 4),
+        )
+        assert segment_columns(df) == ["in.state", "in.vintage"]
+
+    def test_numeric_in_columns_excluded(self) -> None:
+        df = _resstock_df().with_columns(
+            pl.Series("in.sqft..ft2", [1000.0] * 4),
+            pl.Series("in.vintage", ["1980s"] * 4),
+        )
+        assert segment_columns(df) == ["in.vintage"]
+
+    def test_non_in_columns_excluded(self) -> None:
+        df = _resstock_df().with_columns(pl.Series("scenario", ["Baseline"] * 4))
+        assert segment_columns(df) == []
 
 
 # ---------------------------------------------------------------------------
