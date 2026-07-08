@@ -8,6 +8,9 @@ A Streamlit web application for calculating the electricity bill impact of build
 - Run bill calculations across thousands of simulated buildings
 - Explore results with interactive charts and maps
 
+📖 **[User Guide](docs/user_guide.md)** — workflow walkthrough, how ResStock/ComStock
+sampling weights work, and guidance on interpreting every results section.
+
 ---
 
 ## Prerequisites
