@@ -357,6 +357,10 @@ def render_results_page(app_state: AppState) -> None:
     if is_comstock:
         df_sel = add_cost_per_sqft(df_sel, bill_col="selected_bill")
 
+    # Tables/charts collected as sections render, for the HTML report export.
+    report_tables: list[tuple[str, pl.DataFrame]] = []
+    report_charts: list = []
+
     # ── Summary table ─────────────────────────────────────────────────────────
     st.subheader("Bill Summary")
     bill_summary_view = st.radio(
@@ -555,6 +559,7 @@ def render_results_page(app_state: AppState) -> None:
                 width="stretch",
                 hide_index=True,
             )
+            report_tables.append(("Configured Rates", pl.DataFrame(rate_rows)))
         else:
             st.caption("No rates are assigned to the scenarios in these results.")
     except Exception as exc:
@@ -640,6 +645,7 @@ def render_results_page(app_state: AppState) -> None:
                     for c in rate_cols
                 },
             )
+            report_tables.append((f"Rate Comparison — {rate_comp_view}", matrix))
         except Exception as exc:
             st.error(f"Rate comparison error: {exc}")
 
@@ -658,6 +664,7 @@ def render_results_page(app_state: AppState) -> None:
                 value_format=chart_fmt,
             )
             st.altair_chart(chart, width="stretch")
+            report_charts.append(("Mean Annual Bill by Scenario", chart))
         except Exception as exc:
             st.error(f"Chart error: {exc}")
 
@@ -680,6 +687,7 @@ def render_results_page(app_state: AppState) -> None:
                 y_axis_title="Annual Bill ($)",
             )
         st.altair_chart(dist_chart, width="stretch")
+        report_charts.append(("Bill Distribution", dist_chart))
     except Exception as exc:
         st.error(f"Distribution chart error: {exc}")
 
@@ -887,6 +895,8 @@ def render_results_page(app_state: AppState) -> None:
                 .interactive()
             )
             st.altair_chart(diff_chart, width="stretch")
+            report_tables.append(("Bill Savings", diff_summary))
+            report_charts.append(("Annual Bill Savings vs Baseline", diff_chart))
 
             # Savings distribution histogram — the spread behind the means.
             hist_use_per_sqft = (
@@ -904,6 +914,7 @@ def render_results_page(app_state: AppState) -> None:
                 ),
             )
             st.altair_chart(hist_chart, width="stretch")
+            report_charts.append(("Savings Distribution", hist_chart))
 
             # Segment breakout: savings grouped by a categorical building
             # characteristic (Phase 5). Uses the same view (Average/Total)
@@ -1251,6 +1262,90 @@ def render_results_page(app_state: AppState) -> None:
             )
         except Exception as exc:
             st.error(f"Export error: {exc}")
+
+        # Shareable HTML report from the tables/charts rendered above.
+        try:
+            import datetime as _dt
+
+            from buildstock_rate_impact_calculator.data.buildstock_manager import (
+                MIN_WEIGHTED_AREA_SQFT,
+            )
+            from buildstock_rate_impact_calculator.ui.report import (
+                build_html_report,
+            )
+
+            try:
+                from importlib.metadata import version as _pkg_version
+
+                _app_version = _pkg_version("buildstock-rate-impact-calculator")
+            except Exception:
+                _app_version = "dev"
+
+            _geo_sel = app_state.effective_geo_selection()
+            _geo_parts = []
+            if _geo_sel["states"]:
+                _geo_parts.append(f"states: {', '.join(_geo_sel['states'])}")
+            if _geo_sel["county_ids"]:
+                _geo_parts.append(f"{len(_geo_sel['county_ids'])} counties")
+            if _geo_sel["puma_ids"]:
+                _geo_parts.append(f"{len(_geo_sel['puma_ids'])} PUMAs")
+            _config_summary = {
+                "Dataset": f"{app_state.dataset_type} {app_state.release}",
+                "Geography": "; ".join(_geo_parts) or "All states",
+                "Building filters": ", ".join(app_state.active_filters) or "None",
+                "Minimum weighted area": f"{MIN_WEIGHTED_AREA_SQFT:g} ft²",
+                "Energy sources": ", ".join(selected_labels),
+                "Preview run": "Yes" if result_store.get("preview") else "No",
+                "Generated": _dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "App version": _app_version,
+            }
+            _summary_cols = [
+                c
+                for c in (
+                    "scenario",
+                    "upgrade",
+                    "mean_per_sqft",
+                    "median_per_sqft",
+                    "mean_annual_bill",
+                    "median_annual_bill",
+                    "total_annual_bill",
+                    "total_sqft",
+                    "units",
+                    "count",
+                )
+                if summary is not None and c in summary.columns
+            ]
+            _report_tables = list(report_tables)
+            if summary is not None and _summary_cols:
+                _report_tables.insert(
+                    0, ("Bill Summary", summary.select(_summary_cols))
+                )
+            _footnotes = [
+                "Bill components are electricity-only — fuel bills are not decomposed.",
+                "ComStock statistics are per-building $/ft²; totals are "
+                "weighted real-world dollars.",
+            ]
+            if result_store.get("preview"):
+                _footnotes.append(
+                    "Preview run: a stratified sample of buildings was "
+                    "billed; totals are re-scaled estimates."
+                )
+            _html = build_html_report(
+                title=f"BuildStock Rate Impact Report — "
+                f"{app_state.dataset_type} {app_state.release}",
+                config_summary=_config_summary,
+                tables=_report_tables,
+                charts=report_charts,
+                footnotes=_footnotes,
+            )
+            st.download_button(
+                label="⬇ Download HTML Report",
+                data=_html.encode("utf-8"),
+                file_name="buildstock_rate_impact_report.html",
+                mime="text/html",
+            )
+        except Exception as exc:
+            st.error(f"Report export error: {exc}")
 
     with col2:
         if st.button("💾 Save to Output Directory"):

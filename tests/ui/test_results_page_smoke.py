@@ -293,6 +293,11 @@ class TestResStockResultsPage:
         assert len(at.error) == 0
         assert _buildings_metric(at) == "1"
 
+    def test_html_report_download_button(self, resstock_page: AppTest) -> None:
+        """Phase 10: the Export section offers an HTML report download."""
+        labels = [b.label for b in resstock_page.get("download_button")]
+        assert any("HTML Report" in label for label in labels)
+
     def test_small_sample_guardrail_banner(self, resstock_page: AppTest) -> None:
         """Phase 9: fewer than MIN_SAMPLE_MODELS models → warning banner."""
         warnings = " ".join(w.value for w in resstock_page.warning)
