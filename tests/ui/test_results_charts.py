@@ -22,6 +22,8 @@ import pytest
 from buildstock_rate_impact_calculator.ui.components.charts import (
     melt_fuels_to_long,
     render_bill_comparison_bar,
+    render_bill_distribution,
+    render_bill_rate_bar,
     render_bill_stack_bar,
     render_monthly_profile,
     render_savings_histogram,
@@ -272,9 +274,17 @@ class TestRenderMonthlyProfile:
         assert x_enc["field"] == "month"
         assert x_enc["type"] == "ordinal"
 
-    def test_color_encodes_scenario(self) -> None:
+    def test_color_encodes_series_with_wrapped_legend(self) -> None:
         spec = render_monthly_profile(self._long_df()).to_dict()
-        assert spec["encoding"]["color"]["field"] == "scenario"
+        color_enc = spec["encoding"]["color"]
+        # Series labels are pre-wrapped into a helper column; the legend
+        # splits them back into multiple lines and never truncates.
+        assert color_enc["field"] == "_series_wrapped"
+        assert color_enc["legend"]["labelLimit"] == 0
+        assert "split(" in color_enc["legend"]["labelExpr"]
+        # Tooltip still shows the original (unwrapped) series label.
+        tooltip_fields = [t["field"] for t in spec["encoding"]["tooltip"]]
+        assert "scenario" in tooltip_fields
 
     def test_value_format_wired_to_axis_and_tooltip(self) -> None:
         spec = render_monthly_profile(
@@ -285,6 +295,149 @@ class TestRenderMonthlyProfile:
             t.get("format") for t in spec["encoding"]["tooltip"] if t.get("format")
         ]
         assert "$.2f" in formats
+
+
+# ---------------------------------------------------------------------------
+# render_bill_rate_bar (rate sweep view)
+# ---------------------------------------------------------------------------
+
+
+class TestRenderBillRateBar:
+    def _summary(self) -> pl.DataFrame:
+        return pl.DataFrame(
+            {
+                "upgrade": [0, 0, 1, 1],
+                "rate_name": ["Rate A", "Rate B", "Rate A", "Rate B"],
+                "scenario": [
+                    "Baseline",
+                    "Baseline",
+                    "Upgrade 1: A Very Long Measure Name",
+                    "Upgrade 1: A Very Long Measure Name",
+                ],
+                "mean_annual_bill": [1200.0, 1300.0, 950.0, 1000.0],
+            }
+        )
+
+    def test_grouped_by_scenario_colored_by_rate(self) -> None:
+        spec = render_bill_rate_bar(self._summary()).to_dict()
+        assert spec["encoding"]["x"]["field"] == "_scenario_wrapped"
+        assert spec["encoding"]["xOffset"]["field"] == "_rate_wrapped"
+        assert spec["encoding"]["color"]["field"] == "_rate_wrapped"
+
+    def test_x_labels_horizontal_wrapped_untruncated(self) -> None:
+        spec = render_bill_rate_bar(self._summary()).to_dict()
+        axis = spec["encoding"]["x"]["axis"]
+        assert axis["labelAngle"] == 0
+        assert axis["labelLimit"] == 0
+        assert "split(" in axis["labelExpr"]
+        # The long scenario name is wrapped in the data (multi-line marker).
+        values = {row["_scenario_wrapped"] for row in spec["datasets"].popitem()[1]}
+        assert any("|" in v for v in values)
+
+    def test_legend_wrapped_untruncated(self) -> None:
+        spec = render_bill_rate_bar(self._summary()).to_dict()
+        legend = spec["encoding"]["color"]["legend"]
+        assert legend["labelLimit"] == 0
+        assert "split(" in legend["labelExpr"]
+
+    def test_default_title(self) -> None:
+        spec = render_bill_rate_bar(self._summary()).to_dict()
+        assert spec["title"] == "Mean Annual Electricity Bill by Scenario and Rate"
+
+    def test_tooltip_uses_unwrapped_labels(self) -> None:
+        spec = render_bill_rate_bar(self._summary()).to_dict()
+        tooltip_fields = [t["field"] for t in spec["encoding"]["tooltip"]]
+        assert "scenario" in tooltip_fields
+        assert "rate_name" in tooltip_fields
+
+
+# ---------------------------------------------------------------------------
+# render_bill_distribution (Tukey boxplot + per-rate view)
+# ---------------------------------------------------------------------------
+
+
+class TestRenderBillDistribution:
+    def _df(self, with_rates: bool = False) -> pl.DataFrame:
+        base = pl.DataFrame(
+            {
+                "bldg_id": [1, 2, 3, 1, 2, 3],
+                "upgrade": [0, 0, 0, 1, 1, 1],
+                "scenario": ["Baseline"] * 3 + ["Upgrade 1"] * 3,
+                "annual_bill": [1000.0, 1100.0, 5000.0, 800.0, 900.0, 4000.0],
+            }
+        )
+        if with_rates:
+            return pl.concat(
+                [
+                    base.with_columns(pl.lit("Rate A").alias("rate_name")),
+                    base.with_columns(pl.lit("Rate B").alias("rate_name")),
+                ]
+            )
+        return base
+
+    def test_tukey_whiskers_with_outliers(self) -> None:
+        spec = render_bill_distribution(self._df()).to_dict()
+        mark = spec["mark"]
+        assert mark["type"] == "boxplot"
+        assert mark["extent"] == 1.5
+        assert mark["outliers"] is True
+
+    def test_per_rate_boxes_faceted_by_scenario(self) -> None:
+        spec = render_bill_distribution(
+            self._df(with_rates=True),
+            scenario_col="scenario",
+            rate_col="rate_name",
+        ).to_dict()
+        # Faceted by scenario, one box per rate inside each facet; the rate
+        # identity lives in the color legend (inner x labels are hidden so
+        # long rate names cannot collide).
+        assert spec["facet"]["column"]["field"] == "_scenario_wrapped"
+        inner = spec["spec"]
+        assert inner["encoding"]["x"]["field"] == "_rate_wrapped"
+        assert inner["encoding"]["x"]["axis"]["labels"] is False
+        assert inner["encoding"]["color"]["field"] == "_rate_wrapped"
+        assert inner["mark"]["extent"] == 1.5
+
+    def test_facet_headers_wrapped_untruncated(self) -> None:
+        spec = render_bill_distribution(
+            self._df(with_rates=True),
+            scenario_col="scenario",
+            rate_col="rate_name",
+        ).to_dict()
+        header = spec["facet"]["column"]["header"]
+        assert header["labelLimit"] == 0
+        assert "split(" in header["labelExpr"]
+
+    def test_no_rate_column_falls_back_to_per_upgrade(self) -> None:
+        spec = render_bill_distribution(
+            self._df(), scenario_col="scenario", rate_col="rate_name"
+        ).to_dict()
+        # rate_name absent from the frame → single box per upgrade.
+        assert "facet" not in spec
+        assert spec["encoding"]["x"]["field"] == "upgrade"
+
+
+# ---------------------------------------------------------------------------
+# render_bill_comparison_bar — dotted segment columns (regression)
+# ---------------------------------------------------------------------------
+
+
+class TestComparisonBarDottedGroupCol:
+    def test_dots_in_group_col_are_escaped(self) -> None:
+        """Regression: Vega-Lite reads unescaped dots as nested field access
+        (datum.in.vintage → undefined), collapsing the segment breakout into
+        a single stacked bar."""
+        df = pl.DataFrame(
+            {
+                "in.vintage": ["1980s", "1990s"],
+                "upgrade": [1, 1],
+                "mean_bill_savings": [100.0, 150.0],
+            }
+        )
+        spec = render_bill_comparison_bar(
+            df, group_col="in.vintage", bill_col="mean_bill_savings"
+        ).to_dict()
+        assert spec["encoding"]["x"]["field"] == "in\\.vintage"
 
 
 # ---------------------------------------------------------------------------

@@ -375,20 +375,24 @@ def monthly_bills_long(
 
     Args:
         results_df: Results frame with ``upgrade`` and ``monthly_bills``
-            (``scenario`` is carried through when present). Null / malformed
+            (``scenario`` and ``rate_name`` are carried through when
+            present, so rate-sweep variants stay separate). Null / malformed
             rows are skipped.
         per_sqft: ComStock mode — divide each row's monthly values by
             ``weight × sqft`` (null-safe) before averaging, yielding $/ft².
 
     Returns:
-        DataFrame with ``upgrade``, optional ``scenario``, ``month`` (1–12),
-        and ``value`` (mean monthly bill). Empty when no parseable rows exist.
+        DataFrame with ``upgrade``, optional ``scenario`` / ``rate_name``,
+        ``month`` (1–12), and ``value`` (mean monthly bill). Empty when no
+        parseable rows exist.
     """
     empty_schema = {"upgrade": pl.Int64, "month": pl.Int64, "value": pl.Float64}
     if "monthly_bills" not in results_df.columns:
         return pl.DataFrame(schema=empty_schema)
 
-    id_cols = ["upgrade"] + (["scenario"] if "scenario" in results_df.columns else [])
+    id_cols = ["upgrade"] + [
+        c for c in ("scenario", "rate_name") if c in results_df.columns
+    ]
     keep = id_cols + ["monthly_bills"]
     if per_sqft:
         keep += [c for c in ("weight", "sqft") if c in results_df.columns]

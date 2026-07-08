@@ -310,6 +310,7 @@ def render_results_page(app_state: AppState) -> None:
     from buildstock_rate_impact_calculator.ui.components.charts import (
         render_bill_comparison_bar,
         render_bill_distribution,
+        render_bill_rate_bar,
         render_bill_stack_bar,
         render_monthly_profile,
         render_savings_histogram,
@@ -652,64 +653,144 @@ def render_results_page(app_state: AppState) -> None:
     st.divider()
 
     # ── Bar chart ─────────────────────────────────────────────────────────────
-    st.subheader("Mean Annual Bill by Scenario")
-    if summary is not None:
-        try:
-            # ComStock means are reported on $/ft², ResStock on whole-building $.
-            bill_col = "mean_per_sqft" if is_comstock else "mean_annual_bill"
-            chart_fmt = per_sqft_fmt if is_comstock else dollar_fmt
+    # With rate variants on the frame (Phase 7 sweep, or per-scenario rate
+    # assignments) the bars show every rate each scenario was billed under —
+    # grouped by scenario, colored by rate. Electricity only, since fuel
+    # bills do not vary by electricity rate.
+    st.subheader("Mean Annual Electricity Bill")
+    try:
+        elec_bill_col = "mean_per_sqft" if is_comstock else "mean_annual_bill"
+        chart_fmt = per_sqft_fmt if is_comstock else dollar_fmt
+        if "rate_name" in df_all.columns:
+            elec_summary = summarize_bills(
+                df_all,
+                dataset_type=ds_type,
+                group_by=["rate_name"],
+                bill_columns=["annual_bill"],
+            ).with_columns(
+                pl.col("upgrade")
+                .map_elements(
+                    lambda u: _scenario_display(_base_uri, u),
+                    return_dtype=pl.Utf8,
+                )
+                .alias("scenario")
+            )
+            chart = render_bill_rate_bar(
+                elec_summary,
+                bill_col=elec_bill_col,
+                value_format=chart_fmt,
+                y_axis_title=(
+                    "Mean Electricity Bill ($/ft²)"
+                    if is_comstock
+                    else "Mean Annual Electricity Bill ($)"
+                ),
+            )
+            chart_label = "Mean Annual Electricity Bill by Scenario and Rate"
+        elif summary is not None:
+            # Older frames without rate variants keep the selected-sources bar.
             chart = render_bill_comparison_bar(
                 summary,
-                bill_col=bill_col,
+                bill_col=elec_bill_col,
                 value_format=chart_fmt,
             )
+            chart_label = "Mean Annual Bill by Scenario"
+        else:
+            chart = None
+            chart_label = ""
+        if chart is not None:
             st.altair_chart(chart, width="stretch")
-            report_charts.append(("Mean Annual Bill by Scenario", chart))
-        except Exception as exc:
-            st.error(f"Chart error: {exc}")
+            report_charts.append((chart_label, chart))
+    except Exception as exc:
+        st.error(f"Chart error: {exc}")
 
     st.divider()
 
     # ── Distribution chart ────────────────────────────────────────────────────
-    st.subheader("Bill Distribution")
+    st.subheader("Electricity Bill Distribution")
     try:
+        # Electricity-only per-building values across every rate variant.
         if is_comstock:
-            dist_chart = render_bill_distribution(
-                df_sel,
-                bill_col="cost_per_sqft",
-                value_format=per_sqft_fmt,
-                y_axis_title="Annual Bill ($/ft²)",
-            )
+            dist_df = add_cost_per_sqft(df_all, bill_col="annual_bill")
+            dist_bill_col = "cost_per_sqft"
+            dist_fmt = per_sqft_fmt
+            dist_y_title = "Electricity Bill ($/ft²)"
         else:
-            dist_chart = render_bill_distribution(
-                df_sel,
-                bill_col="selected_bill",
-                y_axis_title="Annual Bill ($)",
-            )
+            dist_df = df_all
+            dist_bill_col = "annual_bill"
+            dist_fmt = dollar_fmt
+            dist_y_title = "Electricity Bill ($)"
+        _dist_has_rates = "rate_name" in df_all.columns
+        dist_chart = render_bill_distribution(
+            dist_df,
+            bill_col=dist_bill_col,
+            value_format=dist_fmt,
+            y_axis_title=dist_y_title,
+            scenario_col="scenario",
+            rate_col="rate_name" if _dist_has_rates else None,
+            chart_title=(
+                "Electricity Bill Distribution by Scenario and Rate"
+                if _dist_has_rates
+                else "Electricity Bill Distribution by Scenario"
+            ),
+        )
         st.altair_chart(dist_chart, width="stretch")
-        report_charts.append(("Bill Distribution", dist_chart))
+        st.caption(
+            "Electricity bill only. Whiskers extend to 1.5×IQR beyond the "
+            "quartiles; points beyond the whiskers are outliers."
+        )
+        report_charts.append(("Electricity Bill Distribution", dist_chart))
     except Exception as exc:
         st.error(f"Distribution chart error: {exc}")
 
     st.divider()
 
     # ── Monthly bill profile ──────────────────────────────────────────────────
-    if "monthly_bills" in df.columns:
-        st.subheader("Monthly Bill Profile")
+    if "monthly_bills" in df_all.columns:
+        st.subheader("Monthly Electricity Bill Profile")
         try:
-            profile = monthly_bills_long(df, per_sqft=is_comstock)
+            profile = monthly_bills_long(df_all, per_sqft=is_comstock)
             if profile.height == 0:
                 st.caption("No monthly bill data available for these results.")
             else:
+                if "rate_name" in profile.columns:
+                    profile = profile.sort(["upgrade", "rate_name"]).with_columns(
+                        pl.concat_str(
+                            [pl.col("scenario"), pl.col("rate_name")],
+                            separator=" — ",
+                        ).alias("series")
+                    )
+                    _series_options = list(dict.fromkeys(profile["series"].to_list()))
+                    _chosen_series = st.multiselect(
+                        "Scenario–rate combinations to display",
+                        options=_series_options,
+                        default=_series_options,
+                        key="monthly_profile_series",
+                    )
+                    if _chosen_series:
+                        profile = profile.filter(pl.col("series").is_in(_chosen_series))
+                    else:
+                        st.caption("No combinations selected — showing all.")
+                    _series_col = "series"
+                    _series_legend = "Scenario — Rate"
+                    _profile_title = (
+                        "Mean Monthly Electricity Bill by Scenario and Rate"
+                    )
+                else:
+                    _series_col = "scenario"
+                    _series_legend = "Scenario"
+                    _profile_title = "Mean Monthly Electricity Bill by Scenario"
                 profile_chart = render_monthly_profile(
                     profile,
                     value_col="value",
                     value_format=per_sqft_fmt if is_comstock else dollar_fmt,
                     y_axis_title=(
-                        "Mean Monthly Bill ($/ft²)"
+                        "Mean Monthly Electricity Bill ($/ft²)"
                         if is_comstock
-                        else "Mean Monthly Bill ($)"
+                        else "Mean Monthly Electricity Bill ($)"
                     ),
+                    scenario_col=_series_col,
+                    legend_title=_series_legend,
+                    chart_title=_profile_title,
                 )
                 st.altair_chart(profile_chart, width="stretch")
                 st.caption(
@@ -1218,7 +1299,7 @@ def render_results_page(app_state: AppState) -> None:
                         _x_enc = alt.X("Group:N", title=None)
                     _chart = (
                         alt.Chart(_plot.to_pandas())
-                        .mark_boxplot(extent="min-max", size=60)
+                        .mark_boxplot(extent=1.5, outliers=True, size=60)
                         .encode(
                             x=_x_enc,
                             y=alt.Y(

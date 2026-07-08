@@ -187,7 +187,7 @@ class TestComStockResultsPage:
 
     def test_monthly_profile_section_present(self, comstock_page: AppTest) -> None:
         subheaders = [s.value for s in comstock_page.subheader]
-        assert "Monthly Bill Profile" in subheaders
+        assert "Monthly Electricity Bill Profile" in subheaders
 
     def test_energy_burden_section_absent(self, comstock_page: AppTest) -> None:
         """Energy burden is a ResStock-only view (no income data in ComStock)."""
@@ -198,6 +198,25 @@ class TestComStockResultsPage:
         """Phase 7: two rates in the frame → Rate Comparison matrix renders."""
         subheaders = [s.value for s in comstock_page.subheader]
         assert "Rate Comparison" in subheaders
+
+    def test_monthly_profile_series_multiselect(self, comstock_page: AppTest) -> None:
+        """Rate-sweep frames expose scenario–rate combos as a multiselect."""
+        at = comstock_page
+        selector = at.multiselect(key="monthly_profile_series")
+        # 2 scenarios × 2 rates = 4 combos, all shown by default.
+        assert len(selector.options) == 4
+        assert selector.value == selector.options
+        # Deselect down to a single combo — the page must rerun cleanly.
+        selector.set_value([selector.options[0]])
+        at.run()
+        assert not at.exception
+        assert len(at.error) == 0
+
+    def test_electricity_bill_sections_renamed(self, comstock_page: AppTest) -> None:
+        subheaders = [s.value for s in comstock_page.subheader]
+        assert "Mean Annual Electricity Bill" in subheaders
+        assert "Electricity Bill Distribution" in subheaders
+        assert "Monthly Electricity Bill Profile" in subheaders
 
     def test_rate_comparison_savings_view_renders(self, comstock_page: AppTest) -> None:
         at = comstock_page
@@ -257,7 +276,7 @@ class TestResStockResultsPage:
         self, resstock_page: AppTest
     ) -> None:
         subheaders = [s.value for s in resstock_page.subheader]
-        assert "Monthly Bill Profile" in subheaders
+        assert "Monthly Electricity Bill Profile" in subheaders
         assert "Peak Demand" in subheaders
 
     def test_energy_burden_section_present(self, resstock_page: AppTest) -> None:

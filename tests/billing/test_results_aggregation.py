@@ -402,6 +402,27 @@ class TestMonthlyBillsLong:
         long = monthly_bills_long(_resstock_df(), per_sqft=False)
         assert long.height == 0
 
+    def test_rate_name_carried_through(self) -> None:
+        """Rate-sweep frames keep one profile per (scenario, rate) variant."""
+        df = pl.concat(
+            [
+                _resstock_df().with_columns(
+                    pl.Series("monthly_bills", [str([100.0] * 12)] * 4),
+                    pl.lit("Rate A").alias("rate_name"),
+                ),
+                _resstock_df().with_columns(
+                    pl.Series("monthly_bills", [str([200.0] * 12)] * 4),
+                    pl.lit("Rate B").alias("rate_name"),
+                ),
+            ]
+        )
+        long = monthly_bills_long(df, per_sqft=False)
+        assert "rate_name" in long.columns
+        # 2 upgrades × 2 rates × 12 months
+        assert long.height == 48
+        rate_a = long.filter(pl.col("rate_name") == "Rate A")
+        assert all(v == pytest.approx(100.0) for v in rate_a["value"].to_list())
+
     def test_scenario_column_carried_through(self) -> None:
         df = _resstock_df().with_columns(
             pl.Series("monthly_bills", [str([100.0] * 12)] * 4),

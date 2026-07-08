@@ -3,10 +3,36 @@ Altair chart components for BuildStock TOU Calculator results visualization.
 """
 
 from __future__ import annotations
+import textwrap
 from typing import Mapping, Optional
 
 import altair as alt
+import pandas as pd
 import polars as pl
+
+# Long labels (scenario names, rate names) are pre-wrapped in the data by
+# joining lines with this separator; axis/legend/header labelExpr split it
+# back so Vega renders multi-line labels instead of truncating.
+_LABEL_LINE_SEP = "|"
+_LABEL_WRAP_EXPR = f"split(datum.label, '{_LABEL_LINE_SEP}')"
+
+
+def _wrap_labels(values: "pd.Series", width: int = 20) -> "pd.Series":
+    """Wrap each label at ~``width`` chars, joining lines with the separator
+    consumed by :data:`_LABEL_WRAP_EXPR`."""
+    return values.map(
+        lambda v: _LABEL_LINE_SEP.join(textwrap.wrap(str(v), width=width)) or str(v)
+    )
+
+
+def _escape_field(name: str) -> str:
+    """Escape dots in a column name for Vega-Lite field shorthands.
+
+    Vega-Lite treats unescaped ``.`` as nested-field access, so a column like
+    ``in.vintage`` silently resolves to ``datum.in.vintage`` (undefined) and
+    every mark collapses onto a single axis position.
+    """
+    return name.replace(".", "\\.")
 
 
 def render_bill_comparison_bar(
@@ -43,10 +69,16 @@ def render_bill_comparison_bar(
             "Mean Bill ($/ft²)" if "per_sqft" in bill_col else "Mean Annual Bill ($)"
         )
 
+    tooltips = [
+        alt.Tooltip(f"{upgrade_col}:N", title="Upgrade"),
+        alt.Tooltip(f"{bill_col}:Q", title=y_axis_title, format=value_format),
+    ]
     if group_col and group_col in pandas_df.columns:
-        x = alt.X(f"{group_col}:N", title=group_col.replace("_", " ").title())
+        group_field = _escape_field(group_col)
+        x = alt.X(f"{group_field}:N", title=group_col.replace("_", " ").title())
         color = alt.Color(f"{upgrade_col}:N", title="Upgrade")
         x_offset = alt.XOffset(f"{upgrade_col}:N")
+        tooltips.insert(0, alt.Tooltip(f"{group_field}:N", title=group_col))
     else:
         x = alt.X(f"{upgrade_col}:N", title="Upgrade Scenario")
         color = alt.Color(f"{upgrade_col}:N", title="Upgrade")
@@ -63,10 +95,7 @@ def render_bill_comparison_bar(
                 axis=alt.Axis(format=value_format),
             ),
             color=color,
-            tooltip=[
-                alt.Tooltip(f"{upgrade_col}:N", title="Upgrade"),
-                alt.Tooltip(f"{bill_col}:Q", title=y_axis_title, format=value_format),
-            ],
+            tooltip=tooltips,
         )
     )
 
@@ -80,6 +109,83 @@ def render_bill_comparison_bar(
     ).interactive()
 
 
+def render_bill_rate_bar(
+    summary_df: pl.DataFrame,
+    scenario_col: str = "scenario",
+    rate_col: str = "rate_name",
+    upgrade_col: str = "upgrade",
+    bill_col: str = "mean_annual_bill",
+    value_format: str = "$.0f",
+    y_axis_title: Optional[str] = None,
+    chart_title: str = "Mean Annual Electricity Bill by Scenario and Rate",
+) -> alt.Chart:
+    """Grouped bar chart of mean electricity bills by scenario × rate.
+
+    One bar group per upgrade scenario (full scenario names on the x-axis,
+    horizontal and wrapped onto multiple lines rather than truncated), with
+    a bar per rate the scenario was billed under, colored by rate. Legend
+    labels also wrap instead of truncating.
+
+    Args:
+        summary_df: Frame from ``summarize_bills(..., group_by=["rate_name"])``
+            with a scenario label column.
+        scenario_col: Scenario label column.
+        rate_col: Rate name column.
+        upgrade_col: Upgrade ID column (drives scenario ordering).
+        bill_col: Value column to plot.
+        value_format: D3 numeric format for tooltips / axis labels.
+        y_axis_title: Optional y-axis label override.
+        chart_title: Chart title text.
+
+    Returns:
+        Altair Chart object.
+    """
+    if y_axis_title is None:
+        y_axis_title = (
+            "Mean Electricity Bill ($/ft²)"
+            if "per_sqft" in bill_col
+            else "Mean Annual Electricity Bill ($)"
+        )
+
+    pandas_df = summary_df.to_pandas().sort_values([upgrade_col, rate_col])
+    pandas_df["_scenario_wrapped"] = _wrap_labels(pandas_df[scenario_col])
+    pandas_df["_rate_wrapped"] = _wrap_labels(pandas_df[rate_col])
+    scenario_order = list(dict.fromkeys(pandas_df["_scenario_wrapped"]))
+    rate_order = sorted(set(pandas_df["_rate_wrapped"]))
+
+    bar = (
+        alt.Chart(pandas_df)
+        .mark_bar()
+        .encode(
+            x=alt.X(
+                "_scenario_wrapped:N",
+                title="Upgrade Scenario",
+                sort=scenario_order,
+                axis=alt.Axis(labelAngle=0, labelLimit=0, labelExpr=_LABEL_WRAP_EXPR),
+            ),
+            xOffset=alt.XOffset("_rate_wrapped:N", sort=rate_order),
+            y=alt.Y(
+                f"{bill_col}:Q",
+                title=y_axis_title,
+                axis=alt.Axis(format=value_format),
+            ),
+            color=alt.Color(
+                "_rate_wrapped:N",
+                title="Rate",
+                sort=rate_order,
+                legend=alt.Legend(labelLimit=0, labelExpr=_LABEL_WRAP_EXPR),
+            ),
+            tooltip=[
+                alt.Tooltip(f"{scenario_col}:N", title="Scenario"),
+                alt.Tooltip(f"{rate_col}:N", title="Rate"),
+                alt.Tooltip(f"{bill_col}:Q", title=y_axis_title, format=value_format),
+            ],
+        )
+    )
+
+    return bar.properties(title=chart_title, width=600, height=350).interactive()
+
+
 def render_bill_distribution(
     results_df: pl.DataFrame,
     group_col: Optional[str] = None,
@@ -87,28 +193,97 @@ def render_bill_distribution(
     bill_col: str = "annual_bill",
     value_format: str = "$.0f",
     y_axis_title: str = "Annual Bill ($)",
+    scenario_col: Optional[str] = None,
+    rate_col: Optional[str] = None,
+    chart_title: str = "Electricity Bill Distribution by Scenario",
 ) -> alt.Chart:
     """
-    Create a box plot showing the distribution of annual bills by upgrade scenario.
+    Box-and-whisker distribution of per-building bills by upgrade scenario.
+
+    Whiskers follow the Tukey convention (Q1 − 1.5·IQR / Q3 + 1.5·IQR) with
+    outliers drawn as points. When ``rate_col`` is given (rate-sweep frames)
+    one box is drawn per rate, faceted by scenario, so every rate's
+    distribution is visible; scenario and rate labels wrap onto multiple
+    lines instead of truncating.
 
     Args:
         results_df: Raw results DataFrame from ``calculate_batch_bills``.
-        group_col: Optional column to facet by (e.g. 'building_type').
+        group_col: Optional column to facet by (e.g. 'building_type');
+            ignored when ``rate_col`` is used.
         upgrade_col: Column with upgrade IDs.
         bill_col: Column with per-building annual bill values.
         value_format: D3 numeric format for tooltips / axis labels.
         y_axis_title: Y-axis label.
+        scenario_col: Scenario label column (used for facet headers when
+            ``rate_col`` is given).
+        rate_col: Rate name column; enables the per-rate view.
+        chart_title: Chart title text.
 
     Returns:
         Altair Chart object.
     """
     df = results_df.filter(pl.col(bill_col).is_not_null())
+
+    if rate_col and rate_col in df.columns and scenario_col in df.columns:
+        keep = [scenario_col, rate_col, upgrade_col, bill_col]
+        pandas_df = df.select(keep).to_pandas()
+        pandas_df = pandas_df.sort_values([upgrade_col, rate_col])
+        pandas_df["_scenario_wrapped"] = _wrap_labels(pandas_df[scenario_col])
+        pandas_df["_rate_wrapped"] = _wrap_labels(pandas_df[rate_col])
+        scenario_order = list(dict.fromkeys(pandas_df["_scenario_wrapped"]))
+        rate_order = sorted(set(pandas_df["_rate_wrapped"]))
+
+        box = (
+            alt.Chart(pandas_df)
+            .mark_boxplot(extent=1.5, outliers=True)
+            .encode(
+                # Rate identity is carried by the color legend; per-box x
+                # labels are hidden because wrapped rate names collide in
+                # the narrow facet bands.
+                x=alt.X(
+                    "_rate_wrapped:N",
+                    title="Rate",
+                    sort=rate_order,
+                    axis=alt.Axis(labels=False, ticks=False),
+                ),
+                y=alt.Y(
+                    f"{bill_col}:Q",
+                    title=y_axis_title,
+                    axis=alt.Axis(format=value_format),
+                ),
+                color=alt.Color(
+                    "_rate_wrapped:N",
+                    title="Rate",
+                    sort=rate_order,
+                    legend=alt.Legend(labelLimit=0, labelExpr=_LABEL_WRAP_EXPR),
+                ),
+                tooltip=[
+                    alt.Tooltip(f"{scenario_col}:N", title="Scenario"),
+                    alt.Tooltip(f"{rate_col}:N", title="Rate"),
+                    alt.Tooltip(
+                        f"{bill_col}:Q", title=y_axis_title, format=value_format
+                    ),
+                ],
+            )
+            .properties(width=180, height=350)
+        )
+        return box.facet(
+            column=alt.Column(
+                "_scenario_wrapped:N",
+                title=None,
+                sort=scenario_order,
+                header=alt.Header(
+                    labelAngle=0, labelLimit=0, labelExpr=_LABEL_WRAP_EXPR
+                ),
+            ),
+        ).properties(title=chart_title)
+
     pandas_df = df.to_pandas()
     pandas_df[upgrade_col] = pandas_df[upgrade_col].astype(str)
 
     box = (
         alt.Chart(pandas_df)
-        .mark_boxplot(extent="min-max")
+        .mark_boxplot(extent=1.5, outliers=True)
         .encode(
             x=alt.X(f"{upgrade_col}:N", title="Upgrade Scenario"),
             y=alt.Y(
@@ -130,15 +305,15 @@ def render_bill_distribution(
                 f"{group_col}:N", title=group_col.replace("_", " ").title()
             ),
             columns=3,
-        ).properties(title="Annual Bill Distribution by Scenario")
+        ).properties(title=chart_title)
     else:
         box = box.properties(
-            title="Annual Bill Distribution by Scenario",
+            title=chart_title,
             width=600,
             height=350,
-        )
+        ).interactive()
 
-    return box.interactive()
+    return box
 
 
 def render_savings_histogram(
@@ -212,25 +387,31 @@ def render_monthly_profile(
     long_df: pl.DataFrame,
     value_col: str = "value",
     value_format: str = "$.0f",
-    y_axis_title: str = "Mean Monthly Bill ($)",
+    y_axis_title: str = "Mean Monthly Electricity Bill ($)",
     scenario_col: str = "scenario",
-    chart_title: str = "Mean Monthly Bill by Scenario",
+    chart_title: str = "Mean Monthly Electricity Bill by Scenario",
+    legend_title: str = "Scenario",
 ) -> alt.Chart:
-    """Render a per-scenario line chart of mean monthly bills.
+    """Render a per-series line chart of mean monthly electricity bills.
 
     Args:
         long_df: Long-form frame from ``monthly_bills_long`` with ``month``
-            (1–12), the value column, and a scenario label column.
+            (1–12), the value column, and a series label column.
         value_col: Numeric column plotted on the y-axis.
         value_format: D3 numeric format for tooltips / axis labels.
         y_axis_title: Y-axis label.
-        scenario_col: Column holding the scenario label (used for color).
+        scenario_col: Column holding the series label (used for color; e.g.
+            a scenario name, or a "scenario — rate" combination). Legend
+            labels wrap onto multiple lines rather than truncating.
         chart_title: Chart title text.
+        legend_title: Legend title for the series color scale.
 
     Returns:
         Altair Chart object.
     """
     pandas_df = long_df.to_pandas()
+    pandas_df["_series_wrapped"] = _wrap_labels(pandas_df[scenario_col], width=28)
+    series_order = list(dict.fromkeys(pandas_df["_series_wrapped"]))
 
     line = (
         alt.Chart(pandas_df)
@@ -242,9 +423,14 @@ def render_monthly_profile(
                 title=y_axis_title,
                 axis=alt.Axis(format=value_format),
             ),
-            color=alt.Color(f"{scenario_col}:N", title="Scenario"),
+            color=alt.Color(
+                "_series_wrapped:N",
+                title=legend_title,
+                sort=series_order,
+                legend=alt.Legend(labelLimit=0, labelExpr=_LABEL_WRAP_EXPR),
+            ),
             tooltip=[
-                alt.Tooltip(f"{scenario_col}:N", title="Scenario"),
+                alt.Tooltip(f"{scenario_col}:N", title=legend_title),
                 alt.Tooltip("month:O", title="Month"),
                 alt.Tooltip(f"{value_col}:Q", title=y_axis_title, format=value_format),
             ],
