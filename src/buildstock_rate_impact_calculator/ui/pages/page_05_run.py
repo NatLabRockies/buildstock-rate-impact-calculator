@@ -15,6 +15,7 @@ import streamlit as st
 import polars as pl
 
 from buildstock_rate_impact_calculator.ui.state import AppState
+from buildstock_rate_impact_calculator.ui import steps
 from buildstock_rate_impact_calculator.ui.project_io import (
     save_project as _save_project,
 )
@@ -470,16 +471,17 @@ def _run_pipeline(
     resolved_rate_assignments: dict,
     resolved_fuel_rate_assignments: dict,
     preloaded_metadata: pl.DataFrame | None = None,
-    resolved_comparison_rates: list[tuple[str, dict]] | None = None,
+    resolved_scenario_comparisons: dict[str, list[tuple[str, dict]]] | None = None,
 ) -> None:
     """
     Background thread: download timeseries then calculate bills.
     Writes results into result_store["df"] on completion.
 
     ``resolved_rate_assignments`` maps scenario key → ``(rate_name,
-    rate_dict)``. ``resolved_comparison_rates`` holds extra ``(name, dict)``
-    electricity rates every scenario is additionally billed under (the rate
-    sweep); load records are reused across variants.
+    rate_dict)`` (the primary rate). ``resolved_scenario_comparisons`` maps
+    scenario key → list of extra ``(name, dict)`` electricity rates that
+    scenario is additionally billed under; load records are reused across
+    variants.
 
     ``preloaded_metadata`` is the session-cached metadata frame resolved on
     the main thread; passing it avoids re-reading the projected metadata cache
@@ -725,7 +727,7 @@ def _run_pipeline(
         # ── calculate electricity bills ───────────────────────────────────────
         load_column = mgr.config.default_load_column
         scalar_weight = app_state.resstock_weight  # None for ComStock
-        comparison = list(resolved_comparison_rates or [])
+        scenario_comparisons = resolved_scenario_comparisons or {}
         all_results = []
 
         for upgrade_id in app_state.selected_upgrades:
@@ -781,8 +783,9 @@ def _run_pipeline(
                 )
                 continue
 
-            # Primary assigned rate first, then comparison (sweep) rates —
-            # the same load records are reused for every variant.
+            # Primary assigned rate first, then this scenario's additional
+            # (sweep) rates — the same load records are reused for every variant.
+            comparison = scenario_comparisons.get(scenario_key, [])
             variants = [(primary_name, rate_config, True)] + [
                 (n, rc, False) for n, rc in comparison if n != primary_name
             ]
@@ -953,6 +956,7 @@ def _render_progress_panel() -> None:
                     tracker.cancel()
     elif snap.is_error:
         st.error(snap.error_message)
+        st.caption("Check rate assignments and configuration, then re-run.")
     elif snap.is_done:
         st.success(
             f"{snap.message}  (total time {_fmt_duration(snap.elapsed_seconds)})"
@@ -993,13 +997,11 @@ def render_run_page(app_state: AppState) -> None:
     """Render the Run page with configuration summary, progress, and cancel."""
     st.header("Run")
 
-    if not app_state.dataset_type or not app_state.release:
-        st.warning("Please select a dataset on the Dataset tab first.")
-        return
-
-    if not app_state.selected_upgrades:
-        st.warning(
-            "Please select one or more upgrade scenarios on the Dataset tab first."
+    if not steps.dataset_complete(app_state):
+        steps.render_gate(
+            "Select a dataset and upgrade scenarios first.",
+            steps.STEP_DATASET,
+            key="gate_run_dataset",
         )
         return
 
@@ -1058,8 +1060,10 @@ def render_run_page(app_state: AppState) -> None:
     if assigned < total_scenarios:
         st.warning(
             f"Only {assigned}/{total_scenarios} scenarios have rates assigned. "
-            "Go to the Rates tab to assign rates before running."
+            "Assign rates on the Energy Rates step before running."
         )
+        if st.button("← Assign rates", key="run_goto_rates"):
+            steps.goto_step(steps.STEP_RATES)
 
     st.divider()
 
@@ -1074,10 +1078,15 @@ def render_run_page(app_state: AppState) -> None:
     is_running = thread is not None and thread.is_alive()
 
     # ── API key pre-flight check ──────────────────────────────────────────────
+    # Union of every scenario's additional (sweep) rates, plus any legacy global
+    # comparison rates, so the URDB-key check covers all rates that will bill.
+    _all_extra_rates = list(app_state.comparison_rates or [])
+    for _names in (app_state.scenario_extra_rates or {}).values():
+        _all_extra_rates.extend(_names)
     needs_urdb = _urdb_key_required(
         app_state.rate_assignments,
         app_state.rate_library,
-        comparison_rates=app_state.comparison_rates,
+        comparison_rates=_all_extra_rates,
     )
     api_key_available = bool(app_state.urdb_api_key or os.getenv("OPENEI_API_KEY"))
     if needs_urdb and not api_key_available:
@@ -1144,11 +1153,19 @@ def render_run_page(app_state: AppState) -> None:
                 for sk, name in app_state.rate_assignments.items()
                 if name and name in _rate_lib
             }
-            _resolved_comparison = [
-                (name, _rate_lib[name])
-                for name in (app_state.comparison_rates or [])
-                if name in _rate_lib
-            ]
+            # Per-scenario additional (sweep) rates → {sk: [(name, dict), …]}.
+            # Legacy global comparison_rates are folded into every scenario so
+            # older projects that predate per-scenario assignment still sweep.
+            _legacy_comparison = list(app_state.comparison_rates or [])
+            _resolved_scenario_comparisons: dict[str, list[tuple[str, dict]]] = {}
+            for sk in app_state.rate_assignments:
+                _names = list(app_state.scenario_extra_rates.get(sk, []))
+                for _n in _legacy_comparison:
+                    if _n not in _names:
+                        _names.append(_n)
+                _resolved_scenario_comparisons[sk] = [
+                    (name, _rate_lib[name]) for name in _names if name in _rate_lib
+                ]
             _resolved_fuel = {
                 sk: {
                     ft: _fuel_lib.get(name) if name else None
@@ -1165,7 +1182,7 @@ def render_run_page(app_state: AppState) -> None:
                     _resolved_rates,
                     _resolved_fuel,
                     _preloaded_metadata,
-                    _resolved_comparison,
+                    _resolved_scenario_comparisons,
                 ),
                 daemon=True,
             )
@@ -1211,4 +1228,5 @@ def render_run_page(app_state: AppState) -> None:
         st.divider()
         st.success(f"Calculation complete — {len(df):,} building-scenario results.")
         st.dataframe(df.head(20).to_pandas(), width="stretch")
-        st.info("Go to the **Results** tab for full visualization and export.")
+        if st.button("View Results →", type="primary", key="run_view_results"):
+            steps.goto_step(steps.STEP_RESULTS)

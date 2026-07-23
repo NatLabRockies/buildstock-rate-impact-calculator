@@ -1,9 +1,12 @@
 """
 Tests for AppState geographic-selection helpers: GISJOIN normalization,
-effective_geo_selection resolution, and apply_geo_filter behavior.
+effective_geo_selection resolution, and apply_geo_filter behavior. Also covers
+the wizard commit-on-Next hook (``commit_pending_geography``).
 """
 
 from __future__ import annotations
+
+from types import SimpleNamespace
 
 import polars as pl
 
@@ -186,3 +189,66 @@ class TestGeoCacheKey:
         b.additional_columns = ["in.heating_setpoint", "in.vintage"]
 
         assert geo_cache_key(a) == geo_cache_key(b)
+
+
+# ===========================================================================
+# commit_pending_geography — wizard "Next" commit hook
+# ===========================================================================
+
+
+class TestCommitPendingGeography:
+    def _patch(self, monkeypatch, session_state):
+        """Patch the geography module's ``st`` (dict-backed session_state) and
+        record calls to the metadata-applying helper."""
+        import buildstock_rate_impact_calculator.ui.pages.page_02_geography as geo
+
+        calls: list[AppState] = []
+
+        def _fake_apply(app_state: AppState) -> bool:
+            calls.append(app_state)
+            return True
+
+        monkeypatch.setattr(geo, "st", SimpleNamespace(session_state=session_state))
+        monkeypatch.setattr(geo, "_apply_geographic_selection", _fake_apply)
+        return geo, calls
+
+    def test_no_pending_returns_true(self, monkeypatch) -> None:
+        geo, calls = self._patch(monkeypatch, {})
+        assert geo.commit_pending_geography(AppState()) is True
+        assert calls == []
+
+    def test_empty_pending_returns_true(self, monkeypatch) -> None:
+        pending = {
+            "selected_states": [],
+            "selected_county_ids": [],
+            "selected_puma_ids": [],
+        }
+        geo, calls = self._patch(monkeypatch, {"_geo_map_pending": pending})
+        assert geo.commit_pending_geography(AppState()) is True
+        assert calls == []
+
+    def test_unchanged_pending_does_not_reapply(self, monkeypatch) -> None:
+        state = AppState()
+        state.selected_states = ["CO"]
+        pending = {
+            "selected_states": ["CO"],
+            "selected_county_ids": [],
+            "selected_puma_ids": [],
+        }
+        geo, calls = self._patch(monkeypatch, {"_geo_map_pending": pending})
+        assert geo.commit_pending_geography(state) is True
+        assert calls == []
+
+    def test_changed_pending_commits_and_applies(self, monkeypatch) -> None:
+        state = AppState()
+        state.selected_states = ["CO"]
+        pending = {
+            "selected_states": ["CO", "TX"],
+            "selected_county_ids": ["G0800690"],
+            "selected_puma_ids": [],
+        }
+        geo, calls = self._patch(monkeypatch, {"_geo_map_pending": pending})
+        assert geo.commit_pending_geography(state) is True
+        assert state.selected_states == ["CO", "TX"]
+        assert state.selected_county_ids == ["G0800690"]
+        assert calls == [state]

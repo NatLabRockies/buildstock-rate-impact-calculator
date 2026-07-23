@@ -45,11 +45,12 @@ propane, fuel oil) are simpler custom flat or block rates applied to annual
 (or monthly, for block rates) consumption; when no fuel rate is assigned,
 the dataset's own default fuel bill column is used where available.
 
-**Rate assignment vs. rate sweep.** Each scenario has one *assigned*
-(primary) rate — e.g. baseline on today's flat rate, the upgrade on a TOU
-rate. Optionally, *comparison rates* (the rate sweep) bill **every**
-scenario under each additional rate, enabling the scenario × rate matrix
-and the multi-rate charts.
+**Rate assignment vs. rate sweep.** You assign one or more rates to each
+scenario. The **first** rate assigned to a scenario is its *primary* rate —
+the one the savings, distribution, and summary views report. Any *additional*
+rates assigned to a scenario bill it a second time (a rate sweep), enabling
+the scenario × rate matrix and the multi-rate charts. A scenario can be
+assigned **All Configured Rates** at once.
 
 **Weights.** Every building model stands in for many real buildings. The
 `weight` column says how many. Section 3 explains how the two datasets
@@ -59,17 +60,34 @@ differ and exactly where weights enter the math.
 
 ## 2. Workflow walkthrough
 
-The app is organized as six tabs, worked left to right. Progress is saved
-into a *project* (a folder under your output directory containing
+The app is a six-step workflow shown as a stepper across the top of the
+page: **1 Dataset → 2 Geography → 3 Building Filters → 4 Energy Rates →
+5 Run → 6 Results**. Completed steps show a ✓ in the stepper. Use the
+**Next →** and **← Back** buttons at the bottom of each page to move through
+the workflow — Next is disabled until the current step has what it needs —
+or click any step in the stepper (or in the sidebar's **Workflow** panel) to
+jump directly to it. Selections on most steps apply immediately; the
+Geography step's selection is applied (and building metadata downloaded) when
+you click **Next** or the page's **Apply selections** button. Progress is
+saved into a *project* (a folder under your output directory containing
 `config.json` and the rate definitions), which can be reloaded from the
-sidebar later.
+sidebar later — loading a project jumps you to the first unfinished step.
 
-### Tab 1 — Dataset
+### Step 1 — Dataset
 Pick the dataset type (ResStock/ComStock) and release, and select the
 baseline plus the upgrade scenarios to analyze. Scenario names are fetched
 from the release's measure documentation.
 
-### Tab 2 — Building Filters
+### Step 2 — Geography
+Select states, counties, or PUMAs on the map. **ComStock requires a
+county-level selection** — its usable metadata is published per county
+(PUMA selections are ignored for ComStock), and every load profile download
+is scoped to your selection. The selection is applied — and the building
+metadata downloaded — when you click **Next** (or the page's **Apply
+selections** button, which lets you preview the applicability table without
+leaving the step).
+
+### Step 3 — Building Filters
 Filter the building stock by characteristics — building type, heating fuel,
 vintage, floor area, HVAC type, income bin (ResStock), annual electricity
 consumption, and any additional `in.*` metadata columns you add. The
@@ -77,21 +95,21 @@ consumption, and any additional `in.*` metadata columns you add. The
 filters; a warning appears below 30 models (see
 [guardrails](#small-sample-and-preview-guardrails)).
 
-### Tab 3 — Geography
-Select states, counties, or PUMAs on the map. **ComStock requires a
-county-level selection** — its usable metadata is published per county
-(PUMA selections are ignored for ComStock), and every load profile download
-is scoped to your selection.
-
-### Tab 4 — Rates
+### Step 4 — Rates
 Build the rate library (fetch URDB tariffs by utility/label, or construct
-flat/TOU/tiered/demand rates in the editor), then assign one electricity
-rate to each scenario. Optionally assign fuel rates per scenario and fuel.
-The **Comparison Rates (Rate Sweep)** multiselect adds rates under which
-*every* scenario is additionally billed — runtime scales with the number of
-rates.
+flat/TOU/tiered/demand rates in the editor), then assign one **or more**
+electricity rates to each scenario with the per-scenario multiselect. The
+first rate you pick for a scenario is its primary rate; any additional rates
+bill that scenario again (a rate sweep) and populate the Rate Comparison
+matrix — runtime scales with the total number of rate assignments. Pick
+**✨ All Configured Rates** to bill a scenario under every rate at once.
+Optionally assign fuel rates per scenario and fuel. At least one scenario
+must have an assigned electricity rate before **Next** unlocks; the Run step
+warns when some scenarios are still unassigned. Note: in-progress entries in
+the rate editors are not preserved if you navigate to another step before
+adding the rate.
 
-### Tab 5 — Run
+### Step 5 — Run
 Review the configuration summary and upgrade applicability, optionally
 enable **⚡ Fast preview** (a stratified sample — see
 [preview sampling](#preview-sampling)), and start the run. The pipeline:
@@ -105,12 +123,20 @@ enable **⚡ Fast preview** (a stratified sample — see
    results.
 
 Runs are cancelable; progress, per-phase timing, and an activity log are
-shown live.
+shown live. When the run finishes, a **View Results →** button takes you
+straight to the Results step.
 
-### Tab 6 — Results
+### Step 6 — Results
 Interactive charts, tables, and exports — covered in detail in
 [Section 4](#4-interpreting-results). Results are also written to
 `<project>/results/bill_results.csv` automatically.
+
+### The sidebar
+The sidebar shows a **Workflow** panel — one line per step with a completion
+mark and a summary of your selections; click any line to jump to that step.
+Below it, **⚙ Setup** holds the data directory and OpenEI API key (expanded
+automatically until a key is stored), and **Project** holds the project name
+and the load-existing-project controls.
 
 ---
 

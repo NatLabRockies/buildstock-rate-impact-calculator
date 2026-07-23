@@ -36,6 +36,20 @@ def test_to_config_dict_excludes_rate_library():
     assert "fuel_rate_library" not in config
 
 
+def test_scenario_extra_rates_roundtrip():
+    """Per-scenario extra rate assignments survive a config dict roundtrip."""
+    state = AppState()
+    state.scenario_extra_rates = {"baseline": ["Rate B", "Rate C"], "upgrade_1": []}
+    config = state.to_config_dict()
+    assert config["scenario_extra_rates"] == {
+        "baseline": ["Rate B", "Rate C"],
+        "upgrade_1": [],
+    }
+    restored = AppState()
+    restored.apply_config_dict(config)
+    assert restored.scenario_extra_rates == state.scenario_extra_rates
+
+
 def test_to_config_dict_includes_project_name():
     """project_name IS included in to_config_dict output."""
     state = AppState()

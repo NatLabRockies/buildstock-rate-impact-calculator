@@ -18,6 +18,7 @@ from __future__ import annotations
 import streamlit as st
 
 from buildstock_rate_impact_calculator.ui.state import AppState
+from buildstock_rate_impact_calculator.ui import steps
 from buildstock_rate_impact_calculator.ui.project_io import (
     save_project as _save_project,
 )
@@ -39,6 +40,11 @@ from buildstock_rate_impact_calculator.rates.fuel_rate import (
 
 def _scenario_key(upgrade_id: int) -> str:
     return "baseline" if upgrade_id == 0 else f"upgrade_{upgrade_id}"
+
+
+# Sentinel option in the per-scenario rate multiselect that expands to every
+# configured electricity rate.
+ALL_RATES_SENTINEL = "✨ All Configured Rates"
 
 
 # ── Fuel rate form ────────────────────────────────────────────────────────────
@@ -218,7 +224,11 @@ def render_rates_page(app_state: AppState) -> None:
     st.header("Energy Rate Configuration")
 
     if not app_state.dataset_type or not app_state.release:
-        st.warning("Please select a dataset on the Dataset tab first.")
+        steps.render_gate(
+            "Select a dataset first.",
+            steps.STEP_DATASET,
+            key="gate_rates_dataset",
+        )
         return
 
     # Show missing-rates banner (set by load_project on project load)
@@ -366,16 +376,30 @@ def render_rates_page(app_state: AppState) -> None:
 
     # ── Electricity rate assignment matrix ────────────────────────────────────
     st.subheader("Assign Rates to Scenarios")
-    st.caption(
-        "For each scenario (baseline + selected upgrades), choose which rate "
-        "structure to apply. One rate per scenario."
-    )
 
     rate_names = list(rate_library.keys())
     scenarios = app_state.selected_upgrades or [0]
 
+    # One-time migration: fold any legacy global comparison rates into each
+    # scenario's per-scenario extra-rate list, then clear the global field.
+    if app_state.comparison_rates:
+        for _uid in scenarios:
+            _sk = _scenario_key(_uid)
+            _existing = app_state.scenario_extra_rates.get(_sk, [])
+            app_state.scenario_extra_rates[_sk] = _existing + [
+                r for r in app_state.comparison_rates if r not in _existing
+            ]
+        app_state.comparison_rates = []
+
     # Electricity
     st.markdown("**⚡ Electricity**")
+    st.caption(
+        f"Assign one or more rates to each scenario. The **first** selected rate "
+        "is the primary rate used for the savings, distribution, and summary "
+        "views; any additional rates populate the Rate Comparison matrix. Choose "
+        f"**{ALL_RATES_SENTINEL}** to bill the scenario under every configured rate."
+    )
+    _assignments_changed = False
     for upgrade_id in scenarios:
         scenario_key = _scenario_key(upgrade_id)
         label = get_upgrade_label(_base_uri, upgrade_id)
@@ -383,27 +407,36 @@ def render_rates_page(app_state: AppState) -> None:
             f"Upgrade {upgrade_id}: {label}" if upgrade_id > 0 else f"Baseline: {label}"
         )
 
-        current_name = app_state.rate_assignments.get(scenario_key)
+        # Reconstruct the current ordered selection: primary first, then extras.
+        primary = app_state.rate_assignments.get(scenario_key)
+        extras = app_state.scenario_extra_rates.get(scenario_key, [])
+        current_list = ([primary] if primary in rate_names else []) + [
+            r for r in extras if r in rate_names and r != primary
+        ]
 
-        try:
-            current_idx = (
-                rate_names.index(current_name) + 1 if current_name in rate_names else 0
-            )
-        except ValueError:
-            current_idx = 0
-
-        chosen = st.selectbox(
+        chosen = st.multiselect(
             scenario_display,
-            options=["— None —"] + rate_names,
-            index=current_idx,
+            options=[ALL_RATES_SENTINEL] + rate_names,
+            default=current_list,
             key=f"rate_assign_{scenario_key}",
+            placeholder="Select one or more rates",
         )
 
-        if chosen == "— None —":
-            if scenario_key in app_state.rate_assignments:
-                del app_state.rate_assignments[scenario_key]
+        # Expand the "All" sentinel; keep any explicitly-picked rate as primary.
+        picked = [c for c in chosen if c != ALL_RATES_SENTINEL]
+        if ALL_RATES_SENTINEL in chosen:
+            picked = picked + [r for r in rate_names if r not in picked]
+
+        new_primary = picked[0] if picked else None
+        new_extras = picked[1:]
+        if new_primary != primary or new_extras != extras:
+            _assignments_changed = True
+        if picked:
+            app_state.rate_assignments[scenario_key] = new_primary
+            app_state.scenario_extra_rates[scenario_key] = new_extras
         else:
-            app_state.rate_assignments[scenario_key] = chosen
+            app_state.rate_assignments.pop(scenario_key, None)
+            app_state.scenario_extra_rates.pop(scenario_key, None)
 
     # Fuel types — only show assignment if rates exist for that type
     for ft in FUEL_TYPES:
@@ -453,37 +486,30 @@ def render_rates_page(app_state: AppState) -> None:
             else:
                 app_state.fuel_rate_assignments[scenario_key][ft] = chosen_fuel
 
-    # ── Comparison rates (rate sweep) ─────────────────────────────────────────
-    st.divider()
-    st.subheader("Comparison Rates (Rate Sweep)")
-    elec_rate_names = list(app_state.rate_library.keys())
-    if elec_rate_names:
-        chosen_comparison = st.multiselect(
-            "Comparison rates (rate sweep)",
-            options=elec_rate_names,
-            default=[n for n in app_state.comparison_rates if n in elec_rate_names],
-            key="comparison_rates_select",
-            help=(
-                "Every scenario is additionally billed under each selected "
-                "rate; runtime scales accordingly. Results gain a Rate "
-                "Comparison matrix."
-            ),
-        )
-        if chosen_comparison != app_state.comparison_rates:
-            app_state.comparison_rates = list(chosen_comparison)
-            if app_state.project_name:
-                _save_project(app_state)
-    else:
-        st.caption("Add electricity rates above to enable the rate sweep.")
+    # Persist assignment changes to the project (rates are also saved as files).
+    if _assignments_changed and app_state.project_name:
+        _save_project(app_state)
 
     # ── Assignment summary ────────────────────────────────────────────────────
-    assigned_count = len(app_state.rate_assignments)
+    st.divider()
     total_scenarios = len(scenarios)
+    assigned_count = sum(
+        1 for uid in scenarios if app_state.rate_assignments.get(_scenario_key(uid))
+    )
+    n_sweep = sum(
+        len(app_state.scenario_extra_rates.get(_scenario_key(uid), []))
+        for uid in scenarios
+    )
     if assigned_count == total_scenarios:
-        st.success(
-            f"All {total_scenarios} scenario(s) have an electricity rate assigned. Ready for Phase 5."
-        )
+        msg = f"All {total_scenarios} scenario(s) have an electricity rate assigned."
+        if n_sweep:
+            msg += (
+                f" {n_sweep} additional rate assignment(s) will populate the "
+                "Rate Comparison matrix."
+            )
+        st.success(msg)
     else:
         st.warning(
-            f"{assigned_count} of {total_scenarios} scenario(s) have electricity rates assigned."
+            f"{assigned_count} of {total_scenarios} scenario(s) have electricity "
+            "rates assigned."
         )

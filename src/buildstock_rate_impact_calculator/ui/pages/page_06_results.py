@@ -18,6 +18,7 @@ import polars as pl
 import streamlit as st
 
 from buildstock_rate_impact_calculator.ui.state import AppState
+from buildstock_rate_impact_calculator.ui import steps
 from buildstock_rate_impact_calculator.data.buildstock_manager import (
     BuildStockDataManager,
 )
@@ -154,11 +155,18 @@ def _build_rates_summary_rows(
 
     rows: list[dict[str, str]] = []
 
-    # Electricity — group scenarios by assigned rate name.
+    # Electricity — group scenarios by each rate they're billed under (primary
+    # plus any per-scenario additional / sweep rates).
     elec_applies: dict[str, list[str]] = {}
     for sk, label in sk_labels.items():
-        name = (app_state.rate_assignments or {}).get(sk)
-        if name:
+        names: list[str] = []
+        primary = (app_state.rate_assignments or {}).get(sk)
+        if primary:
+            names.append(primary)
+        for extra in (app_state.scenario_extra_rates or {}).get(sk, []):
+            if extra and extra not in names:
+                names.append(extra)
+        for name in names:
             elec_applies.setdefault(name, []).append(label)
     for name, labels in elec_applies.items():
         parts = _electricity_charge_summary(app_state.rate_library.get(name, {}))
@@ -223,13 +231,15 @@ def render_results_page(app_state: AppState) -> None:
 
     if df is None or len(df) == 0:
         if not app_state.results_available:
-            st.info(
-                "No results yet. Complete the Run step (tab 5) to generate bill calculations."
-            )
+            st.info("No results yet — complete steps 1–4 and run the calculation.")
+            if st.button("← Go to Run", key="results_goto_run"):
+                steps.goto_step(steps.STEP_RUN)
         else:
             st.warning(
                 "Results were marked available but the DataFrame is missing. Please re-run."
             )
+            if st.button("← Go to Run", key="results_goto_run_missing"):
+                steps.goto_step(steps.STEP_RUN)
         return
 
     # ── Add human-readable scenario labels ───────────────────────────────────
@@ -552,8 +562,8 @@ def render_results_page(app_state: AppState) -> None:
         )
         if rate_rows:
             st.caption(
-                "Rates assigned on the Rates tab, with their charge components "
-                "and the scenarios they apply to."
+                "Rates assigned on the Energy Rates step, with their charge "
+                "components and the scenarios they apply to."
             )
             st.dataframe(
                 pl.DataFrame(rate_rows).to_pandas(),
