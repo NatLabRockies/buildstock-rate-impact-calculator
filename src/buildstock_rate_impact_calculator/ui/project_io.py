@@ -122,6 +122,7 @@ def load_project_rates(
     fuel_rate_assignments: dict[str, dict[str, str | None]],
     rate_label_map: dict[str, str],
     api_key: str,
+    scenario_extra_rates: dict[str, list[str]] | None = None,
 ) -> tuple[dict, dict, list[str]]:
     """Load rate dicts from ``project_dir/rates/``.
 
@@ -154,6 +155,10 @@ def load_project_rates(
     for name in rate_assignments.values():
         if name:
             needed_rate_names.add(name)
+    for names in (scenario_extra_rates or {}).values():
+        for name in names:
+            if name:
+                needed_rate_names.add(name)
 
     needed_fuel_names: set[str] = set()
     for ft_map in fuel_rate_assignments.values():
@@ -233,6 +238,7 @@ def load_project(
         fuel_rate_assignments=app_state.fuel_rate_assignments,
         rate_label_map=app_state.rate_label_map,
         api_key=api_key,
+        scenario_extra_rates=app_state.scenario_extra_rates,
     )
     app_state.rate_library = rate_library
     app_state.fuel_rate_library = fuel_rate_library

@@ -7,7 +7,7 @@ columns) or multi-select dropdowns (for categorical columns). After each
 selection the summary of matching/applicable buildings for the selected
 upgrades, geographies, and filters is refreshed.
 
-Metadata is loaded only after geographic selections are made (Geography tab);
+Metadata is loaded only after geographic selections are made (Geography step);
 an explicit button covers the no-geographic-filter (entire dataset) case.
 
 Tooltips for each filter are pulled from the dataset's ``data_dictionary.tsv``
@@ -16,9 +16,11 @@ Tooltips for each filter are pulled from the dataset's ``data_dictionary.tsv``
 """
 
 from __future__ import annotations
+import re
 import streamlit as st
 
 from buildstock_rate_impact_calculator.ui.state import AppState
+from buildstock_rate_impact_calculator.ui import steps
 from buildstock_rate_impact_calculator.ui.applicability import (
     format_bytes,
     render_applicability_table,
@@ -29,9 +31,54 @@ from buildstock_rate_impact_calculator.ui.metadata_session import (
 )
 
 
+# Tokens that should render all-caps in filter labels rather than title-cased.
+_ACRONYMS = {
+    "RECS",
+    "HVAC",
+    "IECC",
+    "ASHRAE",
+    "DHW",
+    "HSPF",
+    "SEER",
+    "EER",
+    "AMI",
+    "PV",
+    "EV",
+    "LED",
+    "ACH",
+    "WWR",
+    "EUI",
+    "TOU",
+    "MSHP",
+    "ASHP",
+    "GSHP",
+    "AFUE",
+    "COP",
+}
+
+# Full-label overrides for columns whose auto-generated label reads poorly.
+_LABEL_OVERRIDES = {
+    "in.income_recs_2020": "RECS 2020 Standard Income Bins",
+}
+
+# Column whose categorical values are RECS dollar income bins (special display).
+_INCOME_RECS_COL = "in.income_recs_2020"
+
+
+def _titleize(text: str) -> str:
+    """Title-case a snake/space string, keeping known acronyms all-caps."""
+    parts = text.replace("_", " ").split()
+    return " ".join(
+        w.upper() if w.upper() in _ACRONYMS else w.capitalize() for w in parts
+    )
+
+
 def _filter_label(column: str) -> str:
     """Human-friendly label for a metadata column, e.g. 'in.heating_fuel' →
-    'Heating Fuel', 'in.sqft..ft2' → 'Sqft (ft2)'."""
+    'Heating Fuel', 'in.sqft..ft2' → 'Sqft (ft2)', 'in.geometry..recs' →
+    'Geometry (RECS)'. Known acronyms (RECS, HVAC, …) render all-caps."""
+    if column in _LABEL_OVERRIDES:
+        return _LABEL_OVERRIDES[column]
     name = column
     for prefix in ("in.", "out.", "calc."):
         if name.startswith(prefix):
@@ -39,8 +86,8 @@ def _filter_label(column: str) -> str:
             break
     if ".." in name:
         name, unit = name.split("..", 1)
-        return f"{name.replace('_', ' ').title()} ({unit})"
-    return name.replace("_", " ").title()
+        return f"{_titleize(name)} ({unit})"
+    return _titleize(name)
 
 
 def _get_data_dictionary(app_state: AppState, base_uri: str) -> dict:
@@ -73,7 +120,8 @@ def _help_text(data_dict: dict, column: str) -> str:
     """Tooltip text for a filter column.
 
     Returns ``"{field_description} (column: {col})"`` when a description is
-    available; otherwise just the column name.
+    available; otherwise just the column name. Adds a note for the tenure
+    column that ``Not Available`` denotes a vacant dwelling unit.
     """
     from buildstock_rate_impact_calculator.data.data_dictionary import (
         get_field_description,
@@ -81,21 +129,52 @@ def _help_text(data_dict: dict, column: str) -> str:
 
     desc = get_field_description(data_dict, column, default="")
     if desc and desc != column:
-        return f"{desc} (column: {column})"
-    return f"Metadata column: {column}"
+        text = f"{desc} (column: {column})"
+    else:
+        text = f"Metadata column: {column}"
+    if column.split(".")[-1] == "tenure":
+        text += " 'Not Available' means the dwelling unit is vacant."
+    return text
+
+
+_BIN_RANGE_RE = re.compile(r"^(\d+)-(\d+)$")
+_BIN_LT_RE = re.compile(r"^<(\d+)$")
+_BIN_PLUS_RE = re.compile(r"^(\d+)\+$")
+
+
+def _income_bin_sort_key(value: object) -> tuple[int, float]:
+    """Sort RECS income bins low→high; unparseable (e.g. 'Not Available') last."""
+    s = str(value).strip().replace("$", "").replace(",", "")
+    if _BIN_LT_RE.match(s):
+        return (0, -1.0)  # "<20000" is the lowest bin
+    if m := _BIN_RANGE_RE.match(s):
+        return (0, float(m.group(1)))
+    if m := _BIN_PLUS_RE.match(s):
+        return (0, float(m.group(1)))
+    return (1, 0.0)
+
+
+def _format_income_bin(value: object) -> str:
+    """Render a RECS income bin with dollar signs and thousands separators."""
+    s = str(value).strip().replace("$", "").replace(",", "")
+    if m := _BIN_LT_RE.match(s):
+        return f"< ${int(m.group(1)):,}"
+    if m := _BIN_RANGE_RE.match(s):
+        return f"${int(m.group(1)):,} – ${int(m.group(2)):,}"
+    if m := _BIN_PLUS_RE.match(s):
+        return f"${int(m.group(1)):,}+"
+    return str(value)
 
 
 def render_building_filter_page(app_state: AppState) -> None:
     """Render the building characteristic filter UI."""
     st.header("Building Filters")
 
-    if not app_state.dataset_type or not app_state.release:
-        st.warning("Please select a dataset on the Dataset tab first.")
-        return
-
-    if not app_state.selected_upgrades:
-        st.warning(
-            "Please select one or more upgrade scenarios on the Dataset tab first."
+    if not steps.dataset_complete(app_state):
+        steps.render_gate(
+            "Select a dataset and upgrade scenarios first.",
+            steps.STEP_DATASET,
+            key="gate_filters_dataset",
         )
         return
 
@@ -118,13 +197,15 @@ def render_building_filter_page(app_state: AppState) -> None:
                 # ComStock has no national metadata file — per-county only.
                 st.info(
                     "ComStock metadata is only available per county. Select "
-                    "states or counties on the Geography tab first (whole-state "
+                    "states or counties on the Geography step first (whole-state "
                     "selections download every county in the state)."
                 )
+                if st.button("← Go to Geography", key="gate_filters_geo_comstock"):
+                    steps.goto_step(steps.STEP_GEOGRAPHY)
                 return
             st.info(
                 "No geographic selections have been made yet. Select geographies "
-                "on the Geography tab, or load metadata for the entire dataset below."
+                "on the Geography step, or load metadata for the entire dataset below."
             )
             if st.button("Load metadata for the entire dataset (no geographic filter)"):
                 with st.spinner("Loading building metadata…"):
@@ -204,6 +285,11 @@ def render_building_filter_page(app_state: AppState) -> None:
         else:
             # Categorical multiselect (preserves prior list-shape filter).
             options = mgr.get_column_unique_values(geo_filtered, col)
+            # RECS income bins: order low→high and display with $ and commas.
+            ms_format = None
+            if col == _INCOME_RECS_COL:
+                options = sorted(options, key=_income_bin_sort_key)
+                ms_format = _format_income_bin
             prior_val = app_state.active_filters.get(col, [])
             prior = (
                 [v for v in prior_val if v in options]
@@ -214,6 +300,7 @@ def render_building_filter_page(app_state: AppState) -> None:
                 label,
                 options=options,
                 default=prior,
+                format_func=ms_format if ms_format else str,
                 key=f"bf_{app_state.dataset_type}_{col}",
                 help=help_text,
                 placeholder="All",
@@ -297,12 +384,9 @@ def render_building_filter_page(app_state: AppState) -> None:
     )
 
     sel = app_state.effective_geo_selection()
-    geo_filter_count = sum(
-        1 for ids in (sel["states"], sel["county_ids"], sel["puma_ids"]) if ids
-    )
-    total_filter_count = len(app_state.active_filters) + geo_filter_count
+    geo_id_count = len(sel["states"]) + len(sel["county_ids"]) + len(sel["puma_ids"])
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     with col1:
         st.metric("Matching Buildings", f"{app_state.building_count:,}")
         from buildstock_rate_impact_calculator.billing.results import (
@@ -315,8 +399,6 @@ def render_building_filter_page(app_state: AppState) -> None:
                 "weighted statistics may be unreliable."
             )
     with col2:
-        st.metric("Active Filters", total_filter_count)
-    with col3:
         st.metric(
             "Est. Timeseries Download",
             format_bytes(app_state.estimated_download_bytes),
@@ -325,6 +407,27 @@ def render_building_filter_page(app_state: AppState) -> None:
                 "time. Metadata for the geographic selection has already been "
                 "downloaded and cached."
             ),
+        )
+
+    # ── Selection breakdown (upgrades / geographies / characteristic filters) ─
+    fcol1, fcol2, fcol3 = st.columns(3)
+    with fcol1:
+        st.metric(
+            "Upgrade Scenarios",
+            len(app_state.selected_upgrades or []),
+            help="Number of scenarios (baseline + upgrades) selected on the Dataset step.",
+        )
+    with fcol2:
+        st.metric(
+            "Geography IDs",
+            geo_id_count,
+            help="Total states, counties, and PUMAs selected on the Geography step.",
+        )
+    with fcol3:
+        st.metric(
+            "Characteristic Filters",
+            len(app_state.active_filters),
+            help="Number of building-characteristic filters applied on this step.",
         )
 
     if app_state.building_count == 0:

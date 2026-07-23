@@ -8,6 +8,8 @@ A Streamlit web application for calculating the electricity bill impact of build
 - Run bill calculations across thousands of simulated buildings
 - Explore results with interactive charts and maps
 
+📖 **[Installation Instructions](docs/bric-installation-instructions.md)** — installation instructions for non-programmers
+
 📖 **[User Guide](docs/user_guide.md)** — workflow walkthrough, how ResStock/ComStock
 sampling weights work, and guidance on interpreting every results section.
 
@@ -59,7 +61,7 @@ This starts the Streamlit development server. Open the URL printed in the termin
 Some rate-lookup features require a free API key from OpenEI:
 
 1. Register at <https://openei.org/services/api/signup/>
-2. Paste your key into the **OpenEI API Key** field in the app sidebar
+2. Paste your key into the **⚙ Setup → OpenEI API Key** field in the app sidebar
 
 ---
 
