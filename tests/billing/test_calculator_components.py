@@ -15,11 +15,11 @@ from buildstock_rate_impact_calculator.billing.calculator import UtilityBillCalc
 from buildstock_rate_impact_calculator.rates.rate_builder import UrdbRateBuilder
 
 COMPONENT_COLUMNS = (
-    "annual_fixed_charge",
-    "annual_energy_charge",
-    "annual_demand_charge",
-    "annual_min_charge",
-    "peak_demand_kw",
+    "electricity_annual_fixed_charge",
+    "electricity_annual_energy_charge",
+    "electricity_annual_demand_charge",
+    "electricity_annual_min_charge",
+    "electricity_peak_demand_kw",
 )
 
 
@@ -49,14 +49,14 @@ class TestComponentExtraction:
             assert col in df.columns
             assert row[col] is not None
         component_sum = (
-            row["annual_fixed_charge"]
-            + row["annual_energy_charge"]
-            + row["annual_demand_charge"]
-            + row["annual_min_charge"]
+            row["electricity_annual_fixed_charge"]
+            + row["electricity_annual_energy_charge"]
+            + row["electricity_annual_demand_charge"]
+            + row["electricity_annual_min_charge"]
         )
-        assert component_sum == pytest.approx(row["annual_bill"], abs=0.05)
+        assert component_sum == pytest.approx(row["electricity_annual_bill"], abs=0.05)
         # Constant 1 kW load → 1 kW peak
-        assert row["peak_demand_kw"] == pytest.approx(1.0)
+        assert row["electricity_peak_demand_kw"] == pytest.approx(1.0)
 
     def test_error_row_has_null_components(self, flat_rate_config: dict) -> None:
         calc = UtilityBillCalculator()

@@ -866,10 +866,10 @@ def _run_pipeline(
 
         # ── compute total energy bill ─────────────────────────────────────────
         fuel_bill_cols = [
-            c for c in combined.columns if c.endswith("_bill") and c != "annual_bill"
+            c for c in combined.columns if c.endswith("_bill") and c != "electricity_annual_bill"
         ]
         if fuel_bill_cols:
-            total_expr = pl.col("annual_bill").fill_null(0.0)
+            total_expr = pl.col("electricity_annual_bill").fill_null(0.0)
             for fc in fuel_bill_cols:
                 total_expr = total_expr + pl.col(fc).fill_null(0.0)
             combined = combined.with_columns(total_expr.alias("total_energy_bill"))

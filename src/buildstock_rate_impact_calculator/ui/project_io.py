@@ -240,7 +240,11 @@ def load_project(
     # 3. Results CSV
     results_csv = project_dir / "results" / "bill_results.csv"
     if results_csv.exists():
-        df = pl.read_csv(results_csv)
+        from buildstock_rate_impact_calculator.billing.results import (
+            migrate_legacy_result_columns,
+        )
+
+        df = migrate_legacy_result_columns(pl.read_csv(results_csv))
         session_state["results_df"] = df
         session_state["_navigate_to_results"] = True
 

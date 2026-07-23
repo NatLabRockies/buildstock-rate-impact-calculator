@@ -109,7 +109,10 @@ def calculate_fuel_bill(
     """Calculate the annual fuel bill from annual energy consumption in kWh.
 
     Annual energy is distributed evenly across 12 months before applying
-    monthly fixed charges and block rate tiers.
+    monthly fixed charges and block rate tiers. The monthly fixed charge
+    accrues only when the building actually consumes this fuel
+    (``annual_energy_kwh > 0``) — a building with no consumption has no
+    service to be charged for.
 
     Args:
         annual_energy_kwh: Total annual fuel energy in kWh (≥ 0; None treated as 0).
@@ -133,6 +136,9 @@ def calculate_fuel_bill(
     fuel_type = fuel_rate_dict.get("fuel_type", "natural_gas")
     name = fuel_rate_dict.get("name", "Custom Fuel Rate")
     fixed = float(fuel_rate_dict.get("fixed_monthly_charge", 0.0))
+    # No consumption of this fuel → no service → no fixed charge.
+    if annual_energy_kwh <= 0.0:
+        fixed = 0.0
     is_block = fuel_rate_dict.get("is_block_rate", False)
 
     if not is_block:
@@ -178,7 +184,8 @@ def flat_fuel_bill_expr(
 
     For flat rates the monthly distribution is irrelevant
     (``12 × fixed + (annual_kwh / kph) × rate``), so the timeseries is not
-    needed.
+    needed. The fixed charge accrues only for rows with any consumption of
+    this fuel (``annual_kwh > 0``) — buildings without the fuel pay nothing.
 
     Args:
         annual_kwh_expr: Expression that evaluates to annual fuel kWh per row
@@ -192,7 +199,10 @@ def flat_fuel_bill_expr(
     kph = kwh_per_unit(fuel_type, unit)
 
     annual_kwh = pl.max_horizontal(annual_kwh_expr.fill_null(0.0), pl.lit(0.0))
-    return pl.lit(12.0 * fixed) + (annual_kwh / pl.lit(kph)) * pl.lit(rate)
+    annual_fixed = (
+        pl.when(annual_kwh > 0.0).then(pl.lit(12.0 * fixed)).otherwise(pl.lit(0.0))
+    )
+    return annual_fixed + (annual_kwh / pl.lit(kph)) * pl.lit(rate)
 
 
 def block_fuel_bill_expr(
@@ -202,7 +212,9 @@ def block_fuel_bill_expr(
     """Return a Polars expression computing the annual block-rate fuel bill.
 
     For each of the 12 months the consumption (in rate-unit) is run through
-    the tiered block rate, then summed plus 12 × monthly fixed charge.
+    the tiered block rate, then summed plus 12 × monthly fixed charge. The
+    fixed charge accrues only for rows with any consumption of this fuel
+    across the year — buildings without the fuel pay nothing.
 
     The tier math is expressed fully vectorized: for tier ``i`` with lower
     bound ``L_i`` and width ``W_i`` (or ``+inf`` for the unbounded top tier),
@@ -244,11 +256,12 @@ def block_fuel_bill_expr(
         tiers.append((lower, width, rate))
         lower = float(limit)
 
-    monthly_bill_exprs: list[pl.Expr] = []
+    monthly_clamped_kwh: list[pl.Expr] = []
+    monthly_energy_exprs: list[pl.Expr] = []
     for monthly_kwh in monthly_kwh_exprs:
-        monthly_units = pl.max_horizontal(
-            monthly_kwh.fill_null(0.0), pl.lit(0.0)
-        ) / pl.lit(kph)
+        clamped_kwh = pl.max_horizontal(monthly_kwh.fill_null(0.0), pl.lit(0.0))
+        monthly_clamped_kwh.append(clamped_kwh)
+        monthly_units = clamped_kwh / pl.lit(kph)
         if not tiers:
             energy_charge: pl.Expr = pl.lit(0.0)
         else:
@@ -263,9 +276,14 @@ def block_fuel_bill_expr(
                     units_in_tier = pl.min_horizontal(over_lower, pl.lit(width))
                 tier_exprs.append(units_in_tier * pl.lit(rate))
             energy_charge = pl.sum_horizontal(tier_exprs)
-        monthly_bill_exprs.append(pl.lit(fixed) + energy_charge)
+        monthly_energy_exprs.append(energy_charge)
 
-    return pl.sum_horizontal(monthly_bill_exprs)
+    # Fixed charges accrue only when the row consumes this fuel at all.
+    total_kwh = pl.sum_horizontal(monthly_clamped_kwh)
+    annual_fixed = (
+        pl.when(total_kwh > 0.0).then(pl.lit(12.0 * fixed)).otherwise(pl.lit(0.0))
+    )
+    return annual_fixed + pl.sum_horizontal(monthly_energy_exprs)
 
 
 def fuel_bill_expr(

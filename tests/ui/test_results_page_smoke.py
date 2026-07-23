@@ -25,24 +25,24 @@ def _comstock_results_df() -> pl.DataFrame:
         {
             "bldg_id": [1, 2, 1, 2],
             "upgrade": [0, 0, 1, 1],
-            "annual_bill": [50_000.0, 160_000.0, 40_000.0, 120_000.0],
+            "electricity_annual_bill": [50_000.0, 160_000.0, 40_000.0, 120_000.0],
             "natural_gas_bill": [10_000.0, 40_000.0, 10_000.0, 40_000.0],
             "weight": [10.0, 20.0, 10.0, 20.0],
             "sqft": [1000.0, 2000.0, 1000.0, 2000.0],
             "_row_uid": ["1_a", "2_a", "1_a", "2_a"],
             "applicable": [True, True, True, False],
             "error": [None, None, None, None],
-            "monthly_bills": [
+            "electricity_monthly_bills": [
                 str([50_000.0 / 12] * 12),
                 str([160_000.0 / 12] * 12),
                 str([40_000.0 / 12] * 12),
                 str([120_000.0 / 12] * 12),
             ],
-            "annual_fixed_charge": [600.0, 1_200.0, 600.0, 1_200.0],
-            "annual_energy_charge": [39_400.0, 118_800.0, 31_400.0, 88_800.0],
-            "annual_demand_charge": [10_000.0, 40_000.0, 8_000.0, 30_000.0],
-            "annual_min_charge": [0.0, 0.0, 0.0, 0.0],
-            "peak_demand_kw": [50.0, 160.0, 40.0, 120.0],
+            "electricity_annual_fixed_charge": [600.0, 1_200.0, 600.0, 1_200.0],
+            "electricity_annual_energy_charge": [39_400.0, 118_800.0, 31_400.0, 88_800.0],
+            "electricity_annual_demand_charge": [10_000.0, 40_000.0, 8_000.0, 30_000.0],
+            "electricity_annual_min_charge": [0.0, 0.0, 0.0, 0.0],
+            "electricity_peak_demand_kw": [50.0, 160.0, 40.0, 120.0],
             "rate_name": ["Test Elec"] * 4,
             "is_primary": [True] * 4,
         }
@@ -50,7 +50,7 @@ def _comstock_results_df() -> pl.DataFrame:
     sweep_variant = base.with_columns(
         pl.lit("Rate B").alias("rate_name"),
         pl.lit(False).alias("is_primary"),
-        (pl.col("annual_bill") * 1.2).alias("annual_bill"),
+        (pl.col("electricity_annual_bill") * 1.2).alias("electricity_annual_bill"),
     )
     return pl.concat([base, sweep_variant])
 
@@ -61,24 +61,24 @@ def _resstock_results_df() -> pl.DataFrame:
         {
             "bldg_id": [1, 2, 1, 2],
             "upgrade": [0, 0, 1, 1],
-            "annual_bill": [1000.0, 2000.0, 800.0, 1500.0],
+            "electricity_annual_bill": [1000.0, 2000.0, 800.0, 1500.0],
             "natural_gas_bill": [100.0, 200.0, 50.0, 100.0],
             "weight": [100.0, 100.0, 100.0, 100.0],
             "sqft": [None, None, None, None],
             "_row_uid": ["1", "2", "1", "2"],
             "applicable": [True, True, True, True],
             "error": [None, None, None, None],
-            "monthly_bills": [
+            "electricity_monthly_bills": [
                 str([1000.0 / 12] * 12),
                 str([2000.0 / 12] * 12),
                 str([800.0 / 12] * 12),
                 str([1500.0 / 12] * 12),
             ],
-            "annual_fixed_charge": [60.0, 60.0, 60.0, 60.0],
-            "annual_energy_charge": [900.0, 1900.0, 700.0, 1400.0],
-            "annual_demand_charge": [40.0, 40.0, 40.0, 40.0],
-            "annual_min_charge": [0.0, 0.0, 0.0, 0.0],
-            "peak_demand_kw": [3.0, 5.0, 2.0, 4.0],
+            "electricity_annual_fixed_charge": [60.0, 60.0, 60.0, 60.0],
+            "electricity_annual_energy_charge": [900.0, 1900.0, 700.0, 1400.0],
+            "electricity_annual_demand_charge": [40.0, 40.0, 40.0, 40.0],
+            "electricity_annual_min_charge": [0.0, 0.0, 0.0, 0.0],
+            "electricity_peak_demand_kw": [3.0, 5.0, 2.0, 4.0],
             "in.vintage": ["1980s", "1990s", "1980s", "1990s"],
             "in.income_recs_2020": ["<20000", "150000+", "<20000", "150000+"],
             # Phase 8: bldg 2 falls outside the assigned rate's window.

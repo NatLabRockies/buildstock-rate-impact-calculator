@@ -55,7 +55,7 @@ def flag_rate_eligibility(
     """Add a ``rate_eligible`` bool column against a rate's window.
 
     Per-building quantities are compared: ComStock rows carry *weighted*
-    ``annual_energy_kwh`` / ``peak_demand_kw``, so both are divided by
+    ``electricity_annual_energy_kwh`` / ``electricity_peak_demand_kw`` — both divided by
     ``weight`` first; ResStock rows are already per-building. The URDB kWh
     window is monthly, so annual consumption is compared as ``annual / 12``
     (mean monthly kWh). Rows with null consumption/peak (e.g. error rows) are
@@ -85,8 +85,8 @@ def flag_rate_eligibility(
             )
         return expr
 
-    kw = _per_building("peak_demand_kw")
-    monthly_kwh_expr = _per_building("annual_energy_kwh")
+    kw = _per_building("electricity_peak_demand_kw")
+    monthly_kwh_expr = _per_building("electricity_annual_energy_kwh")
     monthly_kwh = monthly_kwh_expr / 12.0 if monthly_kwh_expr is not None else None
 
     checks: list[pl.Expr] = []

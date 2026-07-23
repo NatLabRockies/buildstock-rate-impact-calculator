@@ -405,7 +405,7 @@ class TestRenderBillDistribution:
                 "bldg_id": [1, 2, 3, 4, 5] * 2,
                 "upgrade": [0] * 5 + [1] * 5,
                 "scenario": ["Baseline"] * 5 + ["Upgrade 1"] * 5,
-                "annual_bill": [1000.0, 1010.0, 1020.0, 1030.0, 99_999.0]
+                "electricity_annual_bill": [1000.0, 1010.0, 1020.0, 1030.0, 99_999.0]
                 + [800.0, 810.0, 820.0, 830.0, 88_888.0],
             }
         )

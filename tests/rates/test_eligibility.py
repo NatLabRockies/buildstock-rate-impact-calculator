@@ -55,8 +55,8 @@ class TestFlagRateEligibility:
             {
                 "bldg_id": [1, 2, 3],
                 "upgrade": [0, 0, 0],
-                "annual_energy_kwh": [12_000.0, 120_000.0, None],
-                "peak_demand_kw": [4.0, 40.0, None],
+                "electricity_annual_energy_kwh": [12_000.0, 120_000.0, None],
+                "electricity_peak_demand_kw": [4.0, 40.0, None],
                 "weight": [100.0, 100.0, 100.0],
             }
         )
@@ -96,8 +96,8 @@ class TestFlagRateEligibility:
                 "upgrade": [0, 0],
                 # Both rows show 240,000 weighted kWh; bldg 1 represents 20
                 # buildings (12,000 each — small), bldg 2 is one big building.
-                "annual_energy_kwh": [240_000.0, 240_000.0],
-                "peak_demand_kw": [80.0, 80.0],
+                "electricity_annual_energy_kwh": [240_000.0, 240_000.0],
+                "electricity_peak_demand_kw": [80.0, 80.0],
                 "weight": [20.0, 1.0],
             }
         )
@@ -120,7 +120,7 @@ class TestFlagRateEligibility:
         assert out["rate_eligible"].to_list() == [False, True, True]
 
     def test_missing_columns_all_eligible(self) -> None:
-        df = pl.DataFrame({"bldg_id": [1], "upgrade": [0], "annual_bill": [100.0]})
+        df = pl.DataFrame({"bldg_id": [1], "upgrade": [0], "electricity_annual_bill": [100.0]})
         bounds = {"kw_min": None, "kw_max": 5.0, "kwh_min": None, "kwh_max": None}
         out = flag_rate_eligibility(df, bounds, is_comstock=False)
         assert out["rate_eligible"].to_list() == [True]

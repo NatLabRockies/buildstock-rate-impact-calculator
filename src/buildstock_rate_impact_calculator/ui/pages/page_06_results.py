@@ -437,10 +437,10 @@ def render_results_page(app_state: AppState) -> None:
             # ($/ft² for ComStock, whole-building $ for ResStock).
             comp_label_map: dict[str, str] = {}
             for comp, comp_label in (
-                ("annual_fixed_charge", "Fixed"),
-                ("annual_energy_charge", "Energy"),
-                ("annual_demand_charge", "Demand"),
-                ("annual_min_charge", "Minimum"),
+                ("electricity_annual_fixed_charge", "Fixed"),
+                ("electricity_annual_energy_charge", "Energy"),
+                ("electricity_annual_demand_charge", "Demand"),
+                ("electricity_annual_min_charge", "Minimum"),
             ):
                 summary_col = f"mean_{comp}_per_sqft" if is_comstock else f"mean_{comp}"
                 comp_label_map[summary_col] = comp_label
@@ -475,7 +475,7 @@ def render_results_page(app_state: AppState) -> None:
             fuel_label_map: dict[str, str] = {}
             for label in selected_labels:
                 col = sources[label]
-                src = "electricity_bill" if col == "annual_bill" else col
+                src = "electricity_bill" if col == "electricity_annual_bill" else col
                 summary_col = f"mean_{src}_per_sqft" if is_comstock else f"mean_{src}"
                 fuel_label_map[summary_col] = label
             stack_fmt = per_sqft_fmt if is_comstock else dollar_fmt
@@ -510,7 +510,7 @@ def render_results_page(app_state: AppState) -> None:
         try:
             breakdown_map: dict[str, str] = {}
             for label, col in sources.items():
-                src = "electricity_bill" if col == "annual_bill" else col
+                src = "electricity_bill" if col == "electricity_annual_bill" else col
                 summary_col = f"mean_{src}_per_sqft" if is_comstock else f"mean_{src}"
                 if summary_col in summary.columns:
                     breakdown_map[summary_col] = label
@@ -666,7 +666,7 @@ def render_results_page(app_state: AppState) -> None:
                 df_all,
                 dataset_type=ds_type,
                 group_by=["rate_name"],
-                bill_columns=["annual_bill"],
+                bill_columns=["electricity_annual_bill"],
             ).with_columns(
                 pl.col("upgrade")
                 .map_elements(
@@ -710,13 +710,13 @@ def render_results_page(app_state: AppState) -> None:
     try:
         # Electricity-only per-building values across every rate variant.
         if is_comstock:
-            dist_df = add_cost_per_sqft(df_all, bill_col="annual_bill")
+            dist_df = add_cost_per_sqft(df_all, bill_col="electricity_annual_bill")
             dist_bill_col = "cost_per_sqft"
             dist_fmt = per_sqft_fmt
             dist_y_title = "Electricity Bill ($/ft²)"
         else:
             dist_df = df_all
-            dist_bill_col = "annual_bill"
+            dist_bill_col = "electricity_annual_bill"
             dist_fmt = dollar_fmt
             dist_y_title = "Electricity Bill ($)"
         _dist_has_rates = "rate_name" in df_all.columns
@@ -762,7 +762,7 @@ def render_results_page(app_state: AppState) -> None:
     st.divider()
 
     # ── Monthly bill profile ──────────────────────────────────────────────────
-    if "monthly_bills" in df_all.columns:
+    if "electricity_monthly_bills" in df_all.columns:
         st.subheader("Monthly Electricity Bill Profile")
         try:
             profile = monthly_bills_long(df_all, per_sqft=is_comstock)

@@ -65,7 +65,7 @@ def add_energy_burden(
     Args:
         results_df: Results frame carrying ``income_col``.
         income_col: Binned income column (e.g. ``in.income_recs_2020``).
-        bill_col: Bill column to use; falls back to ``annual_bill`` when
+        bill_col: Bill column to use; falls back to ``electricity_annual_bill`` when
             absent from the frame.
 
     Raises:
@@ -74,11 +74,11 @@ def add_energy_burden(
     if income_col not in results_df.columns:
         raise ValueError(f"income column '{income_col}' not found in DataFrame.")
     if bill_col not in results_df.columns:
-        if "annual_bill" not in results_df.columns:
+        if "electricity_annual_bill" not in results_df.columns:
             raise ValueError(
-                f"Neither '{bill_col}' nor 'annual_bill' present in DataFrame."
+                f"Neither '{bill_col}' nor 'electricity_annual_bill' present in DataFrame."
             )
-        bill_col = "annual_bill"
+        bill_col = "electricity_annual_bill"
 
     # Map through the frame's unique labels so the parser runs once per bin.
     unique_labels = results_df[income_col].unique().to_list()

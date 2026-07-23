@@ -107,7 +107,9 @@ def test_load_project_loads_rate_library(tmp_path):
 
 
 def test_load_project_loads_results(tmp_path):
-    """load_project reads bill_results.csv → session_state['results_df'] and sets _navigate_to_results."""
+    """load_project reads bill_results.csv → session_state['results_df'] and sets
+    _navigate_to_results. Legacy column names (pre-``electricity_`` prefix) are
+    migrated on load."""
     csv_content = "bldg_id,upgrade,annual_bill\n1,0,1200.0\n2,0,950.0\n"
     config = {
         "dataset_type": "resstock",
@@ -134,6 +136,9 @@ def test_load_project_loads_results(tmp_path):
 
     assert session.get("results_df") is not None
     assert session.get("_navigate_to_results") is True
+    # Legacy 'annual_bill' column migrated to the electricity_ prefix on load.
+    assert "electricity_annual_bill" in session["results_df"].columns
+    assert "annual_bill" not in session["results_df"].columns
 
 
 def test_load_project_no_results_no_flag(tmp_path):

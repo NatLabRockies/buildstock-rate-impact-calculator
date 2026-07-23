@@ -1045,18 +1045,24 @@ class UtilityBillCalculator:
             row = {
                 "bldg_id": bldg_id,
                 "upgrade": upgrade,
-                "annual_bill": annual_bill,
-                "annual_energy_kwh": annual_kwh,
-                "average_rate_ct_kwh": avg_rate,
-                "monthly_bills": str(monthly),
-                "annual_fixed_charge": _sum12("year1_monthly_fixed_without_system"),
-                "annual_energy_charge": _sum12(
+                "electricity_annual_bill": annual_bill,
+                "electricity_annual_energy_kwh": annual_kwh,
+                "electricity_average_rate_ct_kwh": avg_rate,
+                "electricity_monthly_bills": str(monthly),
+                "electricity_annual_fixed_charge": _sum12(
+                    "year1_monthly_fixed_without_system"
+                ),
+                "electricity_annual_energy_charge": _sum12(
                     "year1_monthly_ec_charge_without_system"
                 ),
-                "annual_demand_charge": _sum12("year1_monthly_dc_fixed_without_system")
+                "electricity_annual_demand_charge": _sum12(
+                    "year1_monthly_dc_fixed_without_system"
+                )
                 + _sum12("year1_monthly_dc_tou_without_system"),
-                "annual_min_charge": _sum12("year1_monthly_minimum_without_system"),
-                "peak_demand_kw": peak_demand_kw,
+                "electricity_annual_min_charge": _sum12(
+                    "year1_monthly_minimum_without_system"
+                ),
+                "electricity_peak_demand_kw": peak_demand_kw,
                 "error": None,
             }
             row.update(per_row_meta)
@@ -1068,15 +1074,15 @@ class UtilityBillCalculator:
             row = {
                 "bldg_id": bldg_id,
                 "upgrade": upgrade,
-                "annual_bill": None,
-                "annual_energy_kwh": None,
-                "average_rate_ct_kwh": None,
-                "monthly_bills": None,
-                "annual_fixed_charge": None,
-                "annual_energy_charge": None,
-                "annual_demand_charge": None,
-                "annual_min_charge": None,
-                "peak_demand_kw": None,
+                "electricity_annual_bill": None,
+                "electricity_annual_energy_kwh": None,
+                "electricity_average_rate_ct_kwh": None,
+                "electricity_monthly_bills": None,
+                "electricity_annual_fixed_charge": None,
+                "electricity_annual_energy_charge": None,
+                "electricity_annual_demand_charge": None,
+                "electricity_annual_min_charge": None,
+                "electricity_peak_demand_kw": None,
                 "error": str(exc),
             }
             row.update(per_row_meta)
@@ -1110,8 +1116,9 @@ class UtilityBillCalculator:
             max_workers: Thread pool size (defaults to self.max_workers).
 
         Returns:
-            Polars DataFrame with at least: ``bldg_id, upgrade, annual_bill,
-            annual_energy_kwh, average_rate_ct_kwh, monthly_bills, error``.
+            Polars DataFrame with at least: ``bldg_id, upgrade,
+            electricity_annual_bill, electricity_annual_energy_kwh,
+            electricity_average_rate_ct_kwh, electricity_monthly_bills, error``.
             Any per-row metadata fields supplied via dict records appear as
             additional columns (filled with ``None`` for tuple-style records).
         """
@@ -1186,15 +1193,15 @@ class UtilityBillCalculator:
             schema = {
                 "bldg_id": pl.Int64,
                 "upgrade": pl.Int64,
-                "annual_bill": pl.Float64,
-                "annual_energy_kwh": pl.Float64,
-                "average_rate_ct_kwh": pl.Float64,
-                "monthly_bills": pl.Utf8,
-                "annual_fixed_charge": pl.Float64,
-                "annual_energy_charge": pl.Float64,
-                "annual_demand_charge": pl.Float64,
-                "annual_min_charge": pl.Float64,
-                "peak_demand_kw": pl.Float64,
+                "electricity_annual_bill": pl.Float64,
+                "electricity_annual_energy_kwh": pl.Float64,
+                "electricity_average_rate_ct_kwh": pl.Float64,
+                "electricity_monthly_bills": pl.Utf8,
+                "electricity_annual_fixed_charge": pl.Float64,
+                "electricity_annual_energy_charge": pl.Float64,
+                "electricity_annual_demand_charge": pl.Float64,
+                "electricity_annual_min_charge": pl.Float64,
+                "electricity_peak_demand_kw": pl.Float64,
                 "error": pl.Utf8,
             }
             return pl.DataFrame(schema=schema)

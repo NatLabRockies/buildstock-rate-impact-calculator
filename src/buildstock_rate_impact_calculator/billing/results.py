@@ -18,18 +18,47 @@ from typing import Optional, Sequence
 
 # Columns that represent per-building bill amounts (used for aggregation).
 _BILL_COLUMNS = (
-    "annual_bill",
+    "electricity_annual_bill",
     "natural_gas_bill",
     "propane_bill",
     "fuel_oil_bill",
     "total_energy_bill",
 )
 
+# Pre-rename → current names for the electricity result columns. Results CSVs
+# saved before the ``electricity_`` prefix was introduced are migrated through
+# this map on project load so older projects keep working.
+LEGACY_RESULT_COLUMN_RENAMES: dict[str, str] = {
+    "annual_bill": "electricity_annual_bill",
+    "monthly_bills": "electricity_monthly_bills",
+    "annual_fixed_charge": "electricity_annual_fixed_charge",
+    "annual_energy_charge": "electricity_annual_energy_charge",
+    "annual_demand_charge": "electricity_annual_demand_charge",
+    "annual_min_charge": "electricity_annual_min_charge",
+    "annual_energy_kwh": "electricity_annual_energy_kwh",
+    "peak_demand_kw": "electricity_peak_demand_kw",
+    "average_rate_ct_kwh": "electricity_average_rate_ct_kwh",
+}
+
+
+def migrate_legacy_result_columns(results_df: pl.DataFrame) -> pl.DataFrame:
+    """Rename pre-``electricity_``-prefix columns on an older results frame.
+
+    No-op for frames already using the current names (or where the new name
+    somehow exists alongside the old one).
+    """
+    renames = {
+        old: new
+        for old, new in LEGACY_RESULT_COLUMN_RENAMES.items()
+        if old in results_df.columns and new not in results_df.columns
+    }
+    return results_df.rename(renames) if renames else results_df
+
 # Energy-source bill columns selectable in the results UI, in display order.
-# ``annual_bill`` is the PySAM electricity bill; the fuel columns come from
+# ``electricity_annual_bill`` is the PySAM electricity bill; the fuel columns come from
 # ``_calculate_fuel_bills`` in page_05_run.
 BILL_SOURCE_LABELS: dict[str, str] = {
-    "annual_bill": "Electricity",
+    "electricity_annual_bill": "Electricity",
     "natural_gas_bill": "Natural Gas",
     "propane_bill": "Propane",
     "fuel_oil_bill": "Fuel Oil",
@@ -37,10 +66,10 @@ BILL_SOURCE_LABELS: dict[str, str] = {
 
 # PySAM electricity-bill charge components (Phase 1); electricity-only.
 _COMPONENT_COLUMNS = (
-    "annual_fixed_charge",
-    "annual_energy_charge",
-    "annual_demand_charge",
-    "annual_min_charge",
+    "electricity_annual_fixed_charge",
+    "electricity_annual_energy_charge",
+    "electricity_annual_demand_charge",
+    "electricity_annual_min_charge",
 )
 
 # Below this many distinct building models, weighted statistics are shaky —
@@ -53,14 +82,14 @@ _META_COLUMNS = frozenset(
         "bldg_id",
         "upgrade",
         "scenario",
-        "annual_energy_kwh",
-        "average_rate_ct_kwh",
-        "monthly_bills",
-        "annual_fixed_charge",
-        "annual_energy_charge",
-        "annual_demand_charge",
-        "annual_min_charge",
-        "peak_demand_kw",
+        "electricity_annual_energy_kwh",
+        "electricity_average_rate_ct_kwh",
+        "electricity_monthly_bills",
+        "electricity_annual_fixed_charge",
+        "electricity_annual_energy_charge",
+        "electricity_annual_demand_charge",
+        "electricity_annual_min_charge",
+        "electricity_peak_demand_kw",
         "error",
         "baseline_bill",
         "bill_diff",
@@ -137,7 +166,7 @@ def _per_sqft_expr(bill_col: str) -> pl.Expr:
 
 def add_cost_per_sqft(
     results_df: pl.DataFrame,
-    bill_col: str = "annual_bill",
+    bill_col: str = "electricity_annual_bill",
     out_col: str = "cost_per_sqft",
 ) -> pl.DataFrame:
     """Add a per-row ``cost_per_sqft`` column.
@@ -175,16 +204,16 @@ def _summarize_bills_resstock(
         pl.col("weight").sum().alias("units"),
         pl.col("bldg_id").count().alias("count"),
     ]
-    if "annual_energy_kwh" in df.columns:
+    if "electricity_annual_energy_kwh" in df.columns:
         agg_exprs.append(
-            pl.col("annual_energy_kwh").mean().alias("mean_annual_energy_kwh")
+            pl.col("electricity_annual_energy_kwh").mean().alias("mean_annual_energy_kwh")
         )
     # Per-source means/totals for the "By fuel" view. Electricity gets a
     # distinct alias because ``mean_annual_bill`` above reflects the selected
     # sources, not necessarily electricity alone.
-    agg_exprs.append(pl.col("annual_bill").mean().alias("mean_electricity_bill"))
+    agg_exprs.append(pl.col("electricity_annual_bill").mean().alias("mean_electricity_bill"))
     agg_exprs.append(
-        (pl.col("annual_bill") * pl.col("weight")).sum().alias("total_electricity_bill")
+        (pl.col("electricity_annual_bill") * pl.col("weight")).sum().alias("total_electricity_bill")
     )
     for fuel_col in (
         "natural_gas_bill",
@@ -205,8 +234,8 @@ def _summarize_bills_resstock(
             agg_exprs.append(
                 (pl.col(comp_col) * pl.col("weight")).sum().alias(f"total_{comp_col}")
             )
-    if "peak_demand_kw" in df.columns:
-        agg_exprs.append(pl.col("peak_demand_kw").mean().alias("mean_peak_demand_kw"))
+    if "electricity_peak_demand_kw" in df.columns:
+        agg_exprs.append(pl.col("electricity_peak_demand_kw").mean().alias("mean_peak_demand_kw"))
     return df.group_by(group_keys).agg(agg_exprs).sort(group_keys)
 
 
@@ -235,17 +264,17 @@ def _summarize_bills_comstock(
         pl.col("weight").sum().alias("units"),
         pl.col("bldg_id").count().alias("count"),
     ]
-    if "annual_energy_kwh" in df.columns:
+    if "electricity_annual_energy_kwh" in df.columns:
         agg_exprs.append(
-            pl.col("annual_energy_kwh").mean().alias("mean_annual_energy_kwh")
+            pl.col("electricity_annual_energy_kwh").mean().alias("mean_annual_energy_kwh")
         )
     for bill_col in _BILL_COLUMNS:
         if bill_col in df.columns:
             # Weighted-dollar means are not meaningful per building, so
             # per-source stats are reported as $/ft²; totals are direct sums.
-            # Electricity (annual_bill) gets a distinct alias so it can't
+            # Electricity (electricity_annual_bill) gets a distinct alias so it can't
             # collide with the selected-sources headline columns.
-            src = "electricity_bill" if bill_col == "annual_bill" else bill_col
+            src = "electricity_bill" if bill_col == "electricity_annual_bill" else bill_col
             agg_exprs.append(
                 _per_sqft_expr(bill_col).mean().alias(f"mean_{src}_per_sqft")
             )
@@ -259,18 +288,18 @@ def _summarize_bills_comstock(
                 _per_sqft_expr(comp_col).mean().alias(f"mean_{comp_col}_per_sqft")
             )
             agg_exprs.append(pl.col(comp_col).sum().alias(f"total_{comp_col}"))
-    if "peak_demand_kw" in df.columns:
-        # peak_demand_kw is a weighted quantity (load × weight went into
+    if "electricity_peak_demand_kw" in df.columns:
+        # electricity_peak_demand_kw is a weighted quantity (load × weight went into
         # PySAM); dividing by weight × sqft gives per-building W/ft².
         denom = pl.col("weight") * pl.col("sqft")
         peak_w_per_sqft = (
             pl.when(
-                pl.col("peak_demand_kw").is_not_null()
+                pl.col("electricity_peak_demand_kw").is_not_null()
                 & pl.col("weight").is_not_null()
                 & pl.col("sqft").is_not_null()
                 & (denom > 0)
             )
-            .then(pl.col("peak_demand_kw") * 1000.0 / denom)
+            .then(pl.col("electricity_peak_demand_kw") * 1000.0 / denom)
             .otherwise(None)
         )
         agg_exprs.append(peak_w_per_sqft.mean().alias("mean_peak_w_per_sqft"))
@@ -288,7 +317,7 @@ def summarize_bills(
     Args:
         results_df: DataFrame from :func:`calculate_batch_bills` joined with
             fuel/metadata columns. Must contain ``bldg_id``, ``upgrade``,
-            ``annual_bill``, and ``weight``.
+            ``electricity_annual_bill``, and ``weight``.
         dataset_type: ``"resstock"`` or ``"comstock"``. Controls whether
             statistics are reported on per-building dollars (ResStock) or
             on per-building $/ft² (ComStock).
@@ -296,7 +325,7 @@ def summarize_bills(
             break the summary out by (e.g. ``"in.vintage"``, ``["rate_name"]``).
         bill_columns: Energy-source bill columns whose per-row sum drives the
             headline statistics (see :data:`BILL_SOURCE_LABELS`). Defaults to
-            ``["annual_bill"]`` (electricity only). Columns absent from the
+            ``["electricity_annual_bill"]`` (electricity only). Columns absent from the
             frame are skipped; fuel nulls are treated as $0.
 
     Returns:
@@ -318,16 +347,16 @@ def summarize_bills(
     """
     if "upgrade" not in results_df.columns:
         raise ValueError("results_df must contain an 'upgrade' column.")
-    if "annual_bill" not in results_df.columns:
-        raise ValueError("results_df must contain an 'annual_bill' column.")
+    if "electricity_annual_bill" not in results_df.columns:
+        raise ValueError("results_df must contain an 'electricity_annual_bill' column.")
     if "weight" not in results_df.columns:
         raise ValueError("results_df must contain a 'weight' column.")
 
     # Error rows (failed PySAM calc) carry a null electricity bill; drop them
     # from statistics regardless of which sources are selected.
-    df = results_df.filter(pl.col("annual_bill").is_not_null())
+    df = results_df.filter(pl.col("electricity_annual_bill").is_not_null())
 
-    selected = [c for c in (bill_columns or ["annual_bill"]) if c in results_df.columns]
+    selected = [c for c in (bill_columns or ["electricity_annual_bill"]) if c in results_df.columns]
     if not selected:
         raise ValueError(
             f"None of the selected bill columns {list(bill_columns or [])} are "
@@ -367,14 +396,14 @@ def monthly_bills_long(
     results_df: pl.DataFrame,
     per_sqft: bool = False,
 ) -> pl.DataFrame:
-    """Explode the stringified ``monthly_bills`` column into a long mean frame.
+    """Explode the stringified ``electricity_monthly_bills`` column into a long mean frame.
 
-    Each results row carries ``monthly_bills`` as ``str(list_of_12_floats)``
+    Each results row carries ``electricity_monthly_bills`` as ``str(list_of_12_floats)``
     (valid JSON). This parses it, explodes to one row per month, and returns
     the mean bill per ``(upgrade[, scenario], month)``.
 
     Args:
-        results_df: Results frame with ``upgrade`` and ``monthly_bills``
+        results_df: Results frame with ``upgrade`` and ``electricity_monthly_bills``
             (``scenario`` and ``rate_name`` are carried through when
             present, so rate-sweep variants stay separate). Null / malformed
             rows are skipped.
@@ -387,22 +416,22 @@ def monthly_bills_long(
         parseable rows exist.
     """
     empty_schema = {"upgrade": pl.Int64, "month": pl.Int64, "value": pl.Float64}
-    if "monthly_bills" not in results_df.columns:
+    if "electricity_monthly_bills" not in results_df.columns:
         return pl.DataFrame(schema=empty_schema)
 
     id_cols = ["upgrade"] + [
         c for c in ("scenario", "rate_name") if c in results_df.columns
     ]
-    keep = id_cols + ["monthly_bills"]
+    keep = id_cols + ["electricity_monthly_bills"]
     if per_sqft:
         keep += [c for c in ("weight", "sqft") if c in results_df.columns]
 
-    df = results_df.select(keep).filter(pl.col("monthly_bills").is_not_null())
+    df = results_df.select(keep).filter(pl.col("electricity_monthly_bills").is_not_null())
     if df.height == 0:
         return pl.DataFrame(schema=empty_schema)
 
     df = df.with_columns(
-        pl.col("monthly_bills").str.json_decode(pl.List(pl.Float64)).alias("_monthly")
+        pl.col("electricity_monthly_bills").str.json_decode(pl.List(pl.Float64)).alias("_monthly")
     ).filter(pl.col("_monthly").list.len() == 12)
     if df.height == 0:
         return pl.DataFrame(schema=empty_schema)
@@ -438,7 +467,7 @@ def monthly_bills_long(
 def compute_bill_savings(
     results_df: pl.DataFrame,
     baseline_upgrade: int = 0,
-    bill_col: str = "annual_bill",
+    bill_col: str = "electricity_annual_bill",
 ) -> pl.DataFrame:
     """Compute per-building bill savings vs the baseline upgrade.
 
@@ -462,7 +491,7 @@ def compute_bill_savings(
             assigned rates comparable.
         baseline_upgrade: The upgrade ID to treat as baseline (default 0).
         bill_col: The per-row bill column to difference (default
-            ``annual_bill``; pass ``selected_bill`` after
+            ``electricity_annual_bill``; pass ``selected_bill`` after
             :func:`with_selected_bill` to cover multiple energy sources).
 
     Returns:

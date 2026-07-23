@@ -46,15 +46,15 @@ def _resstock_df() -> pl.DataFrame:
         {
             "bldg_id": [1, 2, 1, 2],
             "upgrade": [0, 0, 1, 1],
-            "annual_bill": [1000.0, 2000.0, 800.0, 1500.0],
+            "electricity_annual_bill": [1000.0, 2000.0, 800.0, 1500.0],
             "weight": [100.0, 100.0, 100.0, 100.0],
             "sqft": [None, None, None, None],
             "_row_uid": ["1", "2", "1", "2"],
-            "annual_fixed_charge": [60.0, 60.0, 60.0, 60.0],
-            "annual_energy_charge": [900.0, 1900.0, 700.0, 1400.0],
-            "annual_demand_charge": [40.0, 40.0, 40.0, 40.0],
-            "annual_min_charge": [0.0, 0.0, 0.0, 0.0],
-            "peak_demand_kw": [3.0, 5.0, 2.0, 4.0],
+            "electricity_annual_fixed_charge": [60.0, 60.0, 60.0, 60.0],
+            "electricity_annual_energy_charge": [900.0, 1900.0, 700.0, 1400.0],
+            "electricity_annual_demand_charge": [40.0, 40.0, 40.0, 40.0],
+            "electricity_annual_min_charge": [0.0, 0.0, 0.0, 0.0],
+            "electricity_peak_demand_kw": [3.0, 5.0, 2.0, 4.0],
         }
     )
 
@@ -73,17 +73,17 @@ def _comstock_df() -> pl.DataFrame:
         {
             "bldg_id": [1, 2, 1, 2],
             "upgrade": [0, 0, 1, 1],
-            "annual_bill": [50_000.0, 160_000.0, 40_000.0, 120_000.0],
+            "electricity_annual_bill": [50_000.0, 160_000.0, 40_000.0, 120_000.0],
             "weight": [10.0, 20.0, 10.0, 20.0],
             "sqft": [1000.0, 2000.0, 1000.0, 2000.0],
             "_row_uid": ["1_a", "2_a", "1_a", "2_a"],
             # Weighted charge components ($1/ft² demand at baseline).
-            "annual_fixed_charge": [600.0, 1_200.0, 600.0, 1_200.0],
-            "annual_energy_charge": [39_400.0, 118_800.0, 31_400.0, 88_800.0],
-            "annual_demand_charge": [10_000.0, 40_000.0, 8_000.0, 30_000.0],
-            "annual_min_charge": [0.0, 0.0, 0.0, 0.0],
+            "electricity_annual_fixed_charge": [600.0, 1_200.0, 600.0, 1_200.0],
+            "electricity_annual_energy_charge": [39_400.0, 118_800.0, 31_400.0, 88_800.0],
+            "electricity_annual_demand_charge": [10_000.0, 40_000.0, 8_000.0, 30_000.0],
+            "electricity_annual_min_charge": [0.0, 0.0, 0.0, 0.0],
             # Weighted peaks: per-building 5 / 4 W/ft² baseline, 4 / 3 upgrade.
-            "peak_demand_kw": [50.0, 160.0, 40.0, 120.0],
+            "electricity_peak_demand_kw": [50.0, 160.0, 40.0, 120.0],
         }
     )
 
@@ -109,7 +109,7 @@ class TestAddCostPerSqft:
             {
                 "bldg_id": [1, 2],
                 "upgrade": [0, 0],
-                "annual_bill": [100.0, 200.0],
+                "electricity_annual_bill": [100.0, 200.0],
                 "sqft": [10.0, 20.0],
             }
         )
@@ -133,7 +133,7 @@ class TestAddCostPerSqft:
             {
                 "bldg_id": [1, 2, 3],
                 "upgrade": [0, 0, 0],
-                "annual_bill": [100.0, 200.0, 300.0],
+                "electricity_annual_bill": [100.0, 200.0, 300.0],
                 "weight": [0.0, 10.0, 10.0],
                 "sqft": [1000.0, 0.0, 1000.0],
             }
@@ -271,15 +271,19 @@ class TestSummarizeBillsComponents:
         df = _resstock_df()
         summary = summarize_bills(df, dataset_type="resstock").sort("upgrade")
         # Baseline demand charge: mean of (40, 40) = 40; total = 100×40 + 100×40
-        assert summary["mean_annual_demand_charge"].to_list()[0] == pytest.approx(40.0)
-        assert summary["total_annual_demand_charge"].to_list()[0] == pytest.approx(
-            8_000.0
-        )
-        assert summary["mean_annual_fixed_charge"].to_list()[0] == pytest.approx(60.0)
+        assert summary["mean_electricity_annual_demand_charge"].to_list()[
+            0
+        ] == pytest.approx(40.0)
+        assert summary["total_electricity_annual_demand_charge"].to_list()[
+            0
+        ] == pytest.approx(8_000.0)
+        assert summary["mean_electricity_annual_fixed_charge"].to_list()[
+            0
+        ] == pytest.approx(60.0)
         # Energy charge baseline mean: (900 + 1900) / 2 = 1400
-        assert summary["mean_annual_energy_charge"].to_list()[0] == pytest.approx(
-            1400.0
-        )
+        assert summary["mean_electricity_annual_energy_charge"].to_list()[
+            0
+        ] == pytest.approx(1400.0)
 
     def test_resstock_mean_peak_demand_kw(self) -> None:
         df = _resstock_df()
@@ -294,10 +298,10 @@ class TestSummarizeBillsComponents:
         summary = summarize_bills(df, dataset_type="comstock").sort("upgrade")
         # Baseline demand $/ft²: 10000/(10×1000)=1.0, 40000/(20×2000)=1.0 → 1.0
         # Upgrade: 8000/10000=0.8, 30000/40000=0.75 → mean 0.775
-        vals = summary["mean_annual_demand_charge_per_sqft"].to_list()
+        vals = summary["mean_electricity_annual_demand_charge_per_sqft"].to_list()
         assert vals[0] == pytest.approx(1.0)
         assert vals[1] == pytest.approx(0.775)
-        totals = summary["total_annual_demand_charge"].to_list()
+        totals = summary["total_electricity_annual_demand_charge"].to_list()
         assert totals[0] == pytest.approx(50_000.0)
         assert totals[1] == pytest.approx(38_000.0)
 
@@ -314,15 +318,15 @@ class TestSummarizeBillsComponents:
         """Older frames without the Phase-1 columns still summarize cleanly."""
         df = _resstock_df().drop(
             [
-                "annual_fixed_charge",
-                "annual_energy_charge",
-                "annual_demand_charge",
-                "annual_min_charge",
-                "peak_demand_kw",
+                "electricity_annual_fixed_charge",
+                "electricity_annual_energy_charge",
+                "electricity_annual_demand_charge",
+                "electricity_annual_min_charge",
+                "electricity_peak_demand_kw",
             ]
         )
         summary = summarize_bills(df, dataset_type="resstock")
-        assert "mean_annual_demand_charge" not in summary.columns
+        assert "mean_electricity_annual_demand_charge" not in summary.columns
         assert "mean_peak_demand_kw" not in summary.columns
 
 
@@ -352,7 +356,7 @@ class TestMonthlyBillsLong:
     def test_resstock_plain_mean(self) -> None:
         df = _resstock_df().with_columns(
             pl.Series(
-                "monthly_bills",
+                "electricity_monthly_bills",
                 [
                     str([100.0] * 12),
                     str([200.0] * 12),
@@ -373,7 +377,7 @@ class TestMonthlyBillsLong:
         # 160000/12 → per-sqft 5/12 and 4/12 → mean 4.5/12 per month.
         df = _comstock_df().with_columns(
             pl.Series(
-                "monthly_bills",
+                "electricity_monthly_bills",
                 [
                     str([50_000.0 / 12] * 12),
                     str([160_000.0 / 12] * 12),
@@ -389,7 +393,7 @@ class TestMonthlyBillsLong:
     def test_null_rows_skipped(self) -> None:
         df = _resstock_df().with_columns(
             pl.Series(
-                "monthly_bills",
+                "electricity_monthly_bills",
                 [str([100.0] * 12), None, str([80.0] * 12), None],
             )
         )
@@ -407,11 +411,11 @@ class TestMonthlyBillsLong:
         df = pl.concat(
             [
                 _resstock_df().with_columns(
-                    pl.Series("monthly_bills", [str([100.0] * 12)] * 4),
+                    pl.Series("electricity_monthly_bills", [str([100.0] * 12)] * 4),
                     pl.lit("Rate A").alias("rate_name"),
                 ),
                 _resstock_df().with_columns(
-                    pl.Series("monthly_bills", [str([200.0] * 12)] * 4),
+                    pl.Series("electricity_monthly_bills", [str([200.0] * 12)] * 4),
                     pl.lit("Rate B").alias("rate_name"),
                 ),
             ]
@@ -425,7 +429,7 @@ class TestMonthlyBillsLong:
 
     def test_scenario_column_carried_through(self) -> None:
         df = _resstock_df().with_columns(
-            pl.Series("monthly_bills", [str([100.0] * 12)] * 4),
+            pl.Series("electricity_monthly_bills", [str([100.0] * 12)] * 4),
             pl.Series("scenario", ["Baseline", "Baseline", "Up 1", "Up 1"]),
         )
         long = monthly_bills_long(df, per_sqft=False)
@@ -488,7 +492,7 @@ class TestComputeBillSavings:
                 "bldg_id": [1, 2, 1, 2],
                 "upgrade": [0, 0, 1, 1],
                 "rate_name": ["Rate A", "Rate A", "Rate B", "Rate B"],
-                "annual_bill": [1000.0, 2000.0, 800.0, 1500.0],
+                "electricity_annual_bill": [1000.0, 2000.0, 800.0, 1500.0],
                 "weight": [1.0, 1.0, 1.0, 1.0],
                 "_row_uid": ["1", "2", "1", "2"],
             }
@@ -509,7 +513,7 @@ class TestComputeBillSavings:
                 "upgrade": [0, 1, 0, 1],
                 "rate_name": ["Rate A", "Rate A", "Rate B", "Rate B"],
                 # Rate A: 1000 → 800 (saves 200); Rate B: 1500 → 1400 (saves 100)
-                "annual_bill": [1000.0, 800.0, 1500.0, 1400.0],
+                "electricity_annual_bill": [1000.0, 800.0, 1500.0, 1400.0],
                 "weight": [1.0, 1.0, 1.0, 1.0],
             }
         )
@@ -530,7 +534,7 @@ class TestComputeBillSavings:
             _resstock_df().with_columns(
                 pl.Series("natural_gas_bill", [100.0, 200.0, 50.0, 100.0])
             ),
-            ["annual_bill", "natural_gas_bill"],
+            ["electricity_annual_bill", "natural_gas_bill"],
         )
         out = compute_bill_savings(
             df, baseline_upgrade=0, bill_col="selected_bill"
@@ -562,7 +566,7 @@ class TestBillSavingsPct:
             {
                 "bldg_id": [1, 1],
                 "upgrade": [0, 1],
-                "annual_bill": [0.0, -50.0],
+                "electricity_annual_bill": [0.0, -50.0],
                 "weight": [1.0, 1.0],
             }
         )
@@ -574,7 +578,7 @@ class TestBillSavingsPct:
             {
                 "bldg_id": [1, 2, 2],
                 "upgrade": [1, 0, 1],
-                "annual_bill": [800.0, 1000.0, 900.0],
+                "electricity_annual_bill": [800.0, 1000.0, 900.0],
                 "weight": [1.0, 1.0, 1.0],
             }
         )
@@ -684,7 +688,7 @@ class TestBillSourceSelection:
         )
         options = bill_source_options(df)
         assert options == {
-            "Electricity": "annual_bill",
+            "Electricity": "electricity_annual_bill",
             "Natural Gas": "natural_gas_bill",
         }
 
@@ -692,7 +696,7 @@ class TestBillSourceSelection:
         df = _resstock_df().with_columns(
             pl.Series("natural_gas_bill", [100.0, None, 50.0, None])
         )
-        out = with_selected_bill(df, ["annual_bill", "natural_gas_bill"]).sort(
+        out = with_selected_bill(df, ["electricity_annual_bill", "natural_gas_bill"]).sort(
             ["upgrade", "bldg_id"]
         )
         assert out["selected_bill"].to_list() == [
@@ -714,7 +718,7 @@ class TestBillSourceSelection:
         summary = summarize_bills(
             df,
             dataset_type="resstock",
-            bill_columns=["annual_bill", "natural_gas_bill"],
+            bill_columns=["electricity_annual_bill", "natural_gas_bill"],
         ).sort("upgrade")
         # Baseline mean: ((1000+100) + (2000+200)) / 2 = 1650
         assert summary["mean_annual_bill"].to_list()[0] == pytest.approx(1650.0)
@@ -732,7 +736,7 @@ class TestBillSourceSelection:
         summary = summarize_bills(
             df,
             dataset_type="comstock",
-            bill_columns=["annual_bill", "natural_gas_bill"],
+            bill_columns=["electricity_annual_bill", "natural_gas_bill"],
         ).sort("upgrade")
         # Baseline electricity $/ft²: 5.0 and 4.0; gas adds 1.0 to each →
         # combined mean = (6.0 + 5.0) / 2 = 5.5

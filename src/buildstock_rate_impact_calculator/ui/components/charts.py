@@ -416,7 +416,7 @@ def render_bill_distribution(
     results_df: pl.DataFrame,
     group_col: Optional[str] = None,
     upgrade_col: str = "upgrade",
-    bill_col: str = "annual_bill",
+    bill_col: str = "electricity_annual_bill",
     value_format: str = "$.0f",
     y_axis_title: str = "Annual Bill ($)",
     scenario_col: Optional[str] = None,

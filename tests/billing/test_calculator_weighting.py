@@ -23,10 +23,10 @@ def _stub_calc_one_result(bldg_id: Any, upgrade: int, **extras: Any) -> dict:
     row = {
         "bldg_id": bldg_id,
         "upgrade": upgrade,
-        "annual_bill": 1000.0,
-        "annual_energy_kwh": 10000.0,
-        "average_rate_ct_kwh": 10.0,
-        "monthly_bills": "[83.0]*12",
+        "electricity_annual_bill": 1000.0,
+        "electricity_annual_energy_kwh": 10000.0,
+        "electricity_average_rate_ct_kwh": 10.0,
+        "electricity_monthly_bills": "[83.0]*12",
         "error": None,
     }
     row.update(extras)

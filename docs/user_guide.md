@@ -43,7 +43,10 @@ tiers, demand charges, fixed charges, and minimum charges are all honored
 against each building's 8,760-hour load profile. Fuel rates (natural gas,
 propane, fuel oil) are simpler custom flat or block rates applied to annual
 (or monthly, for block rates) consumption; when no fuel rate is assigned,
-the dataset's own default fuel bill column is used where available.
+the dataset's own default fuel bill column is used where available. A fuel
+rate's monthly fixed charge accrues only for buildings that actually consume
+that fuel — a building with zero consumption of a fuel is not billed its
+fixed charge.
 
 **Rate assignment vs. rate sweep.** Each scenario has one *assigned*
 (primary) rate — e.g. baseline on today's flat rate, the upgrade on a TOU
@@ -353,11 +356,17 @@ applicable vs. not.
 
 ## 5. Units cheat sheet
 
+Electricity result columns carry an `electricity_` prefix to distinguish
+them from the fuel bill columns (`natural_gas_bill`, `propane_bill`,
+`fuel_oil_bill`). Results saved by older app versions used unprefixed names
+(`annual_bill`, `monthly_bills`, …) and are renamed automatically when the
+project is loaded.
+
 | Quantity | ResStock | ComStock |
 |---|---|---|
 | `weight` column | Same scalar on every row (dwelling units per model) | Per-row; one `bldg_id` may repeat across counties |
-| `annual_bill`, `annual_energy_kwh`, `peak_demand_kw` (per row) | Per building (one household) | **Weighted** stock totals for that row |
-| Per-building bill lens | `annual_bill` ($/household) | `cost_per_sqft` = bill ÷ (weight × ft²) |
+| `electricity_annual_bill`, `electricity_annual_energy_kwh`, `electricity_peak_demand_kw` (per row) | Per building (one household) | **Weighted** stock totals for that row |
+| Per-building bill lens | `electricity_annual_bill` ($/household) | `cost_per_sqft` = bill ÷ (weight × ft²) |
 | Mean / median statistics | $ per household (unweighted across models) | $/ft² (per-building intensity) |
 | `total_annual_bill` | Σ weight × bill | Σ bill (already weighted) |
 | Stock size metric | `units` = Σ weight (dwelling units) | `total_sqft` = Σ weight × ft² |
@@ -368,10 +377,10 @@ applicable vs. not.
 Other result columns worth knowing: `scenario` (label), `rate_name` /
 `is_primary` (rate-sweep variant identity), `applicable` (upgrade applies
 to this building), `rate_eligible` (inside the rate's kW/kWh window),
-`bill_savings_pct` (fraction of own baseline bill), `monthly_bills`
+`bill_savings_pct` (fraction of own baseline bill), `electricity_monthly_bills`
 (12 electricity values as a JSON list), the four charge components
-(`annual_fixed/energy/demand/min_charge`), `error` (non-null when PySAM
-failed for the row — such rows are excluded from statistics), and any
+(`electricity_annual_fixed/energy/demand/min_charge`), `error` (non-null when
+PySAM failed for the row — such rows are excluded from statistics), and any
 `in.*` characteristic columns joined for filtering/segmenting.
 
 ---
@@ -390,6 +399,9 @@ failed for the row — such rows are excluded from statistics), and any
 - **Electricity-only decomposition.** Charge components, monthly profiles,
   peak demand, and the rate sweep are electricity-only; fuel bills are
   annual and rate-independent of the electricity tariff.
+- **Fuel fixed charges require consumption.** A fuel rate's monthly fixed
+  charge is billed only to buildings with non-zero consumption of that fuel;
+  all-electric buildings pay nothing under an assigned gas/propane/oil rate.
 - **Rate eligibility windows** use URDB's declared limits: peak-kW bounds
   compare against the building's maximum monthly peak; monthly-kWh bounds
   compare against annual consumption ÷ 12. Buildings with missing data are

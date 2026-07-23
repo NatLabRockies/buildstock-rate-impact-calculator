@@ -60,7 +60,7 @@ def _burden_df() -> pl.DataFrame:
         {
             "bldg_id": [1, 2, 1, 2],
             "upgrade": [0, 0, 1, 1],
-            "annual_bill": [1000.0, 2000.0, 800.0, 1500.0],
+            "electricity_annual_bill": [1000.0, 2000.0, 800.0, 1500.0],
             "weight": [100.0, 100.0, 100.0, 100.0],
             "in.income_recs_2020": ["<20000", "150000+", "<20000", "150000+"],
         }
@@ -81,7 +81,7 @@ class TestAddEnergyBurden:
 
     def test_explicit_bill_col(self) -> None:
         df = _burden_df().with_columns(
-            (pl.col("annual_bill") * 2).alias("total_energy_bill")
+            (pl.col("electricity_annual_bill") * 2).alias("total_energy_bill")
         )
         out = add_energy_burden(df, "in.income_recs_2020").sort(["upgrade", "bldg_id"])
         assert out["energy_burden"].to_list()[0] == pytest.approx(0.2)
@@ -99,7 +99,7 @@ class TestAddEnergyBurden:
 
     def test_null_bill_yields_null(self) -> None:
         df = _burden_df().with_columns(
-            pl.Series("annual_bill", [None, 2000.0, 800.0, 1500.0])
+            pl.Series("electricity_annual_bill", [None, 2000.0, 800.0, 1500.0])
         )
         out = add_energy_burden(df, "in.income_recs_2020").sort(["upgrade", "bldg_id"])
         assert out["energy_burden"].to_list()[0] is None
@@ -109,8 +109,8 @@ class TestAddEnergyBurden:
             add_energy_burden(_burden_df(), "in.does_not_exist")
 
     def test_missing_bill_columns_raise(self) -> None:
-        df = _burden_df().drop("annual_bill")
-        with pytest.raises(ValueError, match="annual_bill"):
+        df = _burden_df().drop("electricity_annual_bill")
+        with pytest.raises(ValueError, match="electricity_annual_bill"):
             add_energy_burden(df, "in.income_recs_2020")
 
 
