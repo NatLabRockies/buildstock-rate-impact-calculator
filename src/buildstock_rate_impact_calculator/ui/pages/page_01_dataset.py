@@ -14,14 +14,10 @@ from buildstock_rate_impact_calculator.data.buildstock_manager import (
 )
 from buildstock_rate_impact_calculator.data.upgrade_labels import fetch_upgrade_labels
 from buildstock_rate_impact_calculator.ui.state import AppState
+from buildstock_rate_impact_calculator.ui.steps import DATASET_DISPLAY_NAMES
 
-# Human-readable display names for dataset versions
-_DATASET_DISPLAY_NAMES = {
-    "resstock_2024_release_2": "ResStock 2024 Release 2",
-    "resstock_2025_release_1": "ResStock 2025 Release 1",
-    "comstock_2024_release_2": "ComStock 2024 Release 2",
-    "comstock_2025_release_3": "ComStock 2025 Release 3",
-}
+# Human-readable display names for dataset versions (single source in ui.steps)
+_DATASET_DISPLAY_NAMES = DATASET_DISPLAY_NAMES
 
 
 def _clear_loaded_dataset_data() -> None:
@@ -149,7 +145,8 @@ def render_dataset_page(app_state: AppState) -> None:
             f"Selected: {', '.join(str(u) + ' - ' + _labels.get(u, f'Upgrade {u}') for u in selected_ids)}"
         )
         st.caption(
-            "Selections auto-apply when dataset and one or more scenarios are set."
+            "Selections apply automatically — a ✓ appears on this step when it's "
+            "complete. Click **Next** to continue."
         )
     else:
         st.info("Select one or more Upgrade Scenarios to apply this dataset.")

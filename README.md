@@ -59,7 +59,7 @@ This starts the Streamlit development server. Open the URL printed in the termin
 Some rate-lookup features require a free API key from OpenEI:
 
 1. Register at <https://openei.org/services/api/signup/>
-2. Paste your key into the **OpenEI API Key** field in the app sidebar
+2. Paste your key into the **⚙ Setup → OpenEI API Key** field in the app sidebar
 
 ---
 

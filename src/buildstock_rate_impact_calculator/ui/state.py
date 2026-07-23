@@ -61,9 +61,15 @@ class AppState:
     )
     # Maps rate name → URDB label (for URDB rates only); used to re-fetch missing rate files
     rate_label_map: dict[str, str] = field(default_factory=dict)
-    # Rate sweep: names of extra electricity rates (keys in rate_library) that
-    # every scenario is additionally billed under.
+    # Rate sweep (legacy/global): names of extra electricity rates (keys in
+    # rate_library) that every scenario is additionally billed under. Superseded
+    # by per-scenario ``scenario_extra_rates``; retained for loading old projects
+    # and migrated into the per-scenario map by the Rates page.
     comparison_rates: list[str] = field(default_factory=list)
+    # Maps scenario key → list of ADDITIONAL electricity rate names (beyond the
+    # primary rate in ``rate_assignments``) that the scenario is also billed
+    # under. Enables per-scenario multi-rate assignment / rate sweeps.
+    scenario_extra_rates: dict[str, list[str]] = field(default_factory=dict)
 
     # ── Fast preview sampling ────────────────────────────────────────────────
     # When on, the run pipeline bills a stratified sample of the filtered
@@ -115,6 +121,7 @@ class AppState:
         "fuel_rate_assignments",
         "rate_label_map",
         "comparison_rates",
+        "scenario_extra_rates",
         "preview_mode",
         "preview_n_per_stratum",
         "urdb_api_key",

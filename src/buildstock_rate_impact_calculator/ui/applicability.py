@@ -251,8 +251,8 @@ def render_applicability_table(
             st.markdown(f"**{title}**")
             st.caption(
                 "Building metadata has not been loaded yet — make geographic "
-                "selections on the Geography tab (or load metadata on the "
-                "Building Filters tab) to see the applicability summary."
+                "selections on the Geography step (or load metadata on the "
+                "Building Filters step) to see the applicability summary."
             )
             return
         with st.spinner("Computing upgrade applicability…"):
@@ -294,6 +294,17 @@ def render_applicability_table(
             pl.DataFrame(tbl_rows).to_pandas(),
             hide_index=True,
             width="stretch",
+            column_config={
+                "Applicable": st.column_config.TextColumn(
+                    "Applicable buildings / Total Filtered buildings",
+                    help=(
+                        "Applicable buildings are the number of buildings that "
+                        "have had the upgrade measure applied, and will be "
+                        "downloaded for the analysis. Non-applicable results are "
+                        "identical to the baseline"
+                    ),
+                ),
+            },
         )
         total_est = sum(r["est_bytes"] for r in summary.get("rows", []))
         st.caption(f"Total estimated download: {format_bytes(total_est)}")

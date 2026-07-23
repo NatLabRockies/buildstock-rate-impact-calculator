@@ -11,6 +11,7 @@ from __future__ import annotations
 import streamlit as st
 
 from buildstock_rate_impact_calculator.ui.state import AppState
+from buildstock_rate_impact_calculator.ui import steps
 from buildstock_rate_impact_calculator.ui.project_io import (
     save_project as _save_project,
 )
@@ -32,26 +33,34 @@ from buildstock_rate_impact_calculator.ui.metadata_session import (
 )
 
 
-def _apply_geographic_selection(app_state: AppState) -> None:
+def _apply_geographic_selection(app_state: AppState) -> bool:
     """Load metadata for the current geographic selection and refresh the
     applicability summary.
 
-    Called after the user clicks any Save / Apply button on this page. This is
-    the point where metadata is first downloaded — at the appropriate
+    Called after the user clicks any Apply button on this page, and by
+    :func:`commit_pending_geography` when the user advances with **Next**. This
+    is the point where metadata is first downloaded — at the appropriate
     geographic resolution (ComStock county/PUMA selections load the
     by_state_and_county / by_state_and_puma files) and restricted to the
     possibly-necessary columns.
+
+    Returns True on success, False when a prerequisite is missing or the load
+    fails (the caller should not advance in that case).
     """
     if not app_state.dataset_type or not app_state.release:
-        st.warning(
-            "Select a dataset on the Dataset tab before saving geographic selections."
+        steps.render_gate(
+            "Select a dataset before applying geographic selections.",
+            steps.STEP_DATASET,
+            key="gate_geo_dataset",
         )
-        return
+        return False
     if not app_state.selected_upgrades:
-        st.warning(
-            "Select upgrade scenarios on the Dataset tab before saving geographic selections."
+        steps.render_gate(
+            "Select upgrade scenarios before applying geographic selections.",
+            steps.STEP_DATASET,
+            key="gate_geo_upgrades",
         )
-        return
+        return False
 
     # ComStock metadata is only available per county — require a selection and
     # warn when whole states expand to many county files.
@@ -62,7 +71,7 @@ def _apply_geographic_selection(app_state: AppState) -> None:
                 "ComStock metadata is only available per county. Select one or "
                 "more states or counties before loading metadata."
             )
-            return
+            return False
 
         from buildstock_rate_impact_calculator.ui.applicability import format_bytes
         from buildstock_rate_impact_calculator.ui.metadata_session import get_manager
@@ -89,7 +98,7 @@ def _apply_geographic_selection(app_state: AppState) -> None:
             mgr, metadata = load_session_metadata(app_state)
         except Exception as exc:
             st.error(f"Failed to load metadata: {exc}")
-            return
+            return False
 
     geo_filtered = app_state.apply_geo_filter(metadata)
     if app_state.project_name:
@@ -107,6 +116,43 @@ def _apply_geographic_selection(app_state: AppState) -> None:
             manager=mgr,
             applicable_sets_cache=st.session_state,
         )
+    return True
+
+
+def commit_pending_geography(app_state: AppState) -> bool:
+    """Commit any un-applied map selection; called by the wizard's Next button.
+
+    Returns True when it is safe to advance (nothing pending, or the apply
+    succeeded); False when the apply failed (stay on the page).
+
+    Never clears an existing saved selection: an empty ``map_result`` on a
+    fresh rerun must not wipe state, so we only commit when the pending
+    selection is non-empty in at least one field and differs from what's saved.
+    """
+    pending = st.session_state.get("_geo_map_pending")
+    if not pending:
+        return True
+
+    has_pending = bool(
+        pending.get("selected_states")
+        or pending.get("selected_county_ids")
+        or pending.get("selected_puma_ids")
+    )
+    if not has_pending:
+        return True
+
+    changed = (
+        set(pending["selected_states"]) != set(app_state.selected_states)
+        or set(pending["selected_county_ids"]) != set(app_state.selected_county_ids)
+        or set(pending["selected_puma_ids"]) != set(app_state.selected_puma_ids)
+    )
+    if not changed:
+        return True
+
+    app_state.selected_states = pending["selected_states"]
+    app_state.selected_county_ids = pending["selected_county_ids"]
+    app_state.selected_puma_ids = pending["selected_puma_ids"]
+    return _apply_geographic_selection(app_state)
 
 
 def _render_applicability_table(app_state: AppState) -> None:
@@ -169,15 +215,25 @@ def render_geography_page(app_state: AppState) -> None:
             initial_county_ids=app_state.selected_county_ids,
             initial_puma_ids=app_state.selected_puma_ids,
         )
+        # Stash the live map result so the wizard's Next button can commit it
+        # (metadata download) at the moment the user advances.
+        st.session_state["_geo_map_pending"] = map_result
 
-        # ── Save Selections button ───────────────────────────────────────────
+        # ── Apply button ─────────────────────────────────────────────────────
+        st.caption(
+            "Selections apply when you click **Next** — or apply now to preview "
+            "the applicability table below without leaving this step."
+        )
         st.divider()
-        if st.button("💾 Save Selections", key="save_geo_selections", width="stretch"):
+        if st.button("Apply selections", key="save_geo_selections", width="stretch"):
             app_state.selected_states = map_result["selected_states"]
             app_state.selected_county_ids = map_result["selected_county_ids"]
             app_state.selected_puma_ids = map_result["selected_puma_ids"]
-            _apply_geographic_selection(app_state)
-            st.success("Geographic selections saved.")
+            if _apply_geographic_selection(app_state):
+                st.success(
+                    "Selections applied — applicability shown below. "
+                    "Click Next to continue."
+                )
 
     # ── Tab 2: CSV Upload ─────────────────────────────────────────────────────
     with csv_tab:

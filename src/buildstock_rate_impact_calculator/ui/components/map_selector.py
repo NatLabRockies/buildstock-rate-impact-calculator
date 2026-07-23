@@ -720,7 +720,7 @@ def render_utility_map_selector() -> dict:
 
     Step 3 — the user can click counties to add or remove them from the
     selection before clicking the **Save Selected** button (rendered by the
-    caller in ``page_03_geography.py``).
+    caller in ``page_02_geography.py``).
 
     Returns:
         Dict with ``selected_county_ids`` — list of county GISJOIN strings

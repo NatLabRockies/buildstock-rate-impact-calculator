@@ -34,7 +34,7 @@ pip-system-certs = ">=5.3,<6"
 [tool.pixi.pypi-dependencies]
 buildstock_rate_impact_calculator = { path = ".", editable = true }
 NREL-PySAM = "*"
-streamlit = ">=1.30"
+streamlit = ">=1.45"
 streamlit-folium = "*"
 folium = "*"
 altair = "*"

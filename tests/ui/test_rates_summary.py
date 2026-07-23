@@ -160,3 +160,20 @@ class TestBuildRatesSummaryRows:
             result_columns={"annual_bill"},
         )
         assert rows == []
+
+    def test_extra_rates_appear_in_summary(self) -> None:
+        state = self._app_state()
+        state.rate_library["Elec TOU"] = {
+            "energyratestructure": [[{"rate": 0.20}]],
+        }
+        # Baseline is also billed under the extra "Elec TOU" rate.
+        state.scenario_extra_rates = {"baseline": ["Elec TOU"]}
+        rows = _build_rates_summary_rows(
+            state,
+            upgrade_ids=[0, 1],
+            base_uri=_BASE_URI,
+            result_columns={"annual_bill"},
+        )
+        by_rate = {r["Rate"]: r for r in rows if r["Energy Source"] == "Electricity"}
+        assert "Elec TOU" in by_rate
+        assert by_rate["Elec TOU"]["Applies To"] == "Baseline"
