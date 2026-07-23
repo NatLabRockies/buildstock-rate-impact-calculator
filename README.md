@@ -10,7 +10,7 @@ A Streamlit web application for calculating the electricity bill impact of build
 
 📖 **[User Guide](docs/user_guide.md)** — workflow walkthrough, how ResStock/ComStock
 sampling weights work, and guidance on interpreting every results section.
-
+📖 **[User Guide](docs/bric-installation-instructions.md)** — installation instructions for non-programmers
 ---
 
 ## Prerequisites
