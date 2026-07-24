@@ -873,7 +873,7 @@ def render_results_page(app_state: AppState) -> None:
                     share_lines.append(
                         f"**{label}**: {share_row['pct_saving']:.0%} of buildings "
                         f"save · {share_row['pct_increasing']:.0%} increase · "
-                        f"{share_row['pct_neutral']:.0%} within ±$1"
+                        f"{share_row['pct_neutral']:.0%} within ±\\$1"
                     )
                 if share_lines:
                     st.markdown("  \n".join(share_lines))

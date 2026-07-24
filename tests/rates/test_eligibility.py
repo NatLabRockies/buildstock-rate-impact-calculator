@@ -141,5 +141,8 @@ class TestElectricityEnergyColumnConfig:
             )
             col = mgr.config.electricity_energy_column
             assert col, f"{dataset_type}_{release} missing electricity_energy_column"
+            # Must still be fetched for bill calculations even though it is no
+            # longer exposed as a Building Filters slider (removed from
+            # filter_columns); it is supplied via electricity_energy_column.
             assert col in mgr.get_app_metadata_columns()
-            assert col in (mgr.config.filter_columns or [])
+            assert col not in (mgr.config.filter_columns or [])

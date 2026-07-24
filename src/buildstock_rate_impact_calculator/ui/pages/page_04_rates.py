@@ -222,6 +222,9 @@ def _render_fuel_rate_form(fuel_rate_library: dict) -> dict | None:
 def render_rates_page(app_state: AppState) -> None:
     """Render the energy rate configuration and assignment UI."""
     st.header("Energy Rate Configuration")
+    st.caption(
+        "Configure energy rates for your project. You can search for existing rates in the URDB, build custom TOU or flat electricity rates, or add fuel rates."
+    )
 
     if not app_state.dataset_type or not app_state.release:
         steps.render_gate(
@@ -253,7 +256,7 @@ def render_rates_page(app_state: AppState) -> None:
         ["🔍 Search URDB", "⏱ Build TOU Rate", "📏 Flat Rate", "⛽ Fuel Rates"]
     )
 
-    with urdb_tab:
+    with urdb_tab, st.container(border=True):
         new_rate = render_urdb_search(
             api_key=app_state.urdb_api_key, dataset_type=app_state.dataset_type
         )
@@ -263,7 +266,7 @@ def render_rates_page(app_state: AppState) -> None:
             if app_state.project_name:
                 _save_project(app_state)
 
-    with tou_tab:
+    with tou_tab, st.container(border=True):
         new_rate = render_tou_builder()
         if new_rate:
             key = new_rate.get("name", f"Custom TOU {len(rate_library) + 1}")
@@ -271,7 +274,7 @@ def render_rates_page(app_state: AppState) -> None:
             if app_state.project_name:
                 _save_project(app_state)
 
-    with flat_tab:
+    with flat_tab, st.container(border=True):
         new_rate = render_flat_rate_form()
         if new_rate:
             key = new_rate.get("name", f"Flat Rate {len(rate_library) + 1}")
@@ -279,7 +282,7 @@ def render_rates_page(app_state: AppState) -> None:
             if app_state.project_name:
                 _save_project(app_state)
 
-    with fuel_tab:
+    with fuel_tab, st.container(border=True):
         new_fuel_rate = _render_fuel_rate_form(fuel_rate_library)
         if new_fuel_rate:
             fuel_rate_library[new_fuel_rate["name"]] = new_fuel_rate

@@ -124,7 +124,7 @@ def render_urdb_search(api_key: str, dataset_type: str = "resstock") -> Optional
     label as the ``ratesforutility`` parameter.
 
     Step 3 — the user picks a rate from the results table and clicks
-    "Load selected rate" to return the full rate dict.
+    "Add selected rate" to return the full rate dict.
 
     Args:
         api_key: OpenEI API key (from sidebar).
@@ -300,20 +300,33 @@ def render_urdb_search(api_key: str, dataset_type: str = "resstock") -> Optional
             )
             return None
 
+    st.markdown("**Search results:**")
     display_rows = [
         {
             "Name": r.get("name", "—"),
-            "Utility": r.get("utility", "—"),
-            "Sector": r.get("sector", "—"),
-            "Approved": "✓" if r.get("approved") else "—",
             "Start Date": _fmt_ts(r.get("startdate")),
             "End Date": _fmt_ts(r.get("enddate")),
-            "Label": r.get("label", "—"),
+            "Label": (
+                f"https://apps.openei.org/IURDB/rate/view/{r['label']}"
+                if r.get("label")
+                else None
+            ),
         }
         for r in results
     ]
     df = pd.DataFrame(display_rows)
-    st.dataframe(df, width="stretch", hide_index=True)
+    st.dataframe(
+        df,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Label": st.column_config.LinkColumn(
+                "Label",
+                help="Open this rate on the OpenEI Utility Rate Database",
+                display_text=r"/IURDB/rate/view/(.+)$",
+            ),
+        },
+    )
 
     label_options = [r.get("label", "") for r in results if r.get("label")]
     name_options = [
@@ -324,14 +337,16 @@ def render_urdb_search(api_key: str, dataset_type: str = "resstock") -> Optional
     if not label_options:
         return None
 
+    st.markdown("**Select Rate to Load:**")
     chosen_idx = st.selectbox(
-        "Select rate",
+        "Select rate:",
         options=range(len(name_options)),
         format_func=lambda i: name_options[i],
         key="urdb_selected_idx",
+        label_visibility="collapsed",
     )
 
-    if st.button("Load selected rate", key="urdb_load_btn"):
+    if st.button("Add selected rate", type='primary', key="urdb_load_btn"):
         chosen_label = label_options[chosen_idx]
         try:
             client = _get_urdb_client(api_key)
@@ -434,7 +449,7 @@ def render_tou_builder() -> Optional[dict]:
     and optional demand charges: monthly (flat) demand charges by month and
     TOU demand charges by month and hour.
 
-    Returns the built URDB v8 rate dict when the user clicks 'Build Rate',
+    Returns the built URDB v8 rate dict when the user clicks 'Add TOU rate',
     or None otherwise.
     """
     st.markdown(
@@ -591,7 +606,7 @@ def render_tou_builder() -> Optional[dict]:
                 st.dataframe(_schedule_preview_df(d_weekend))
 
     # ── Build ──────────────────────────────────────────────────────────────────
-    if not st.button("Build Rate", type="primary", key="tou_build_btn"):
+    if not st.button("Add TOU rate", type="primary", key="tou_build_btn"):
         return None
 
     errors: list[str] = []
@@ -668,7 +683,7 @@ def render_flat_rate_form() -> Optional[dict]:
     """
     st.markdown("Enter a simple flat rate with an optional fixed meter charge.")
 
-    with st.form("flat_rate_form"):
+    with st.form("flat_rate_form", border=False):
         col1, col2 = st.columns(2)
         with col1:
             rate_name = st.text_input("Rate Name", value="Custom Flat Rate")
@@ -687,7 +702,7 @@ def render_flat_rate_form() -> Optional[dict]:
             )
             fixed_units = fc2.selectbox("Units", options=["$/month", "$/day"])
         sector = st.selectbox("Sector", options=["Residential", "Commercial"])
-        submitted = st.form_submit_button("Create Flat Rate")
+        submitted = st.form_submit_button("Add Flat rate", type="primary")
 
     if not submitted:
         return None

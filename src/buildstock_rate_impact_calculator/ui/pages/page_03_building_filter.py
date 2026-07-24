@@ -269,11 +269,21 @@ def render_building_filter_page(app_state: AppState) -> None:
             else:
                 default_lo, default_hi = col_min, col_max
 
+            # ComStock sqft spans a huge range; step by 1000 ft² so the slider
+            # isn't absurdly precise. Streamlit defaults the step otherwise.
+            slider_step = None
+            if (
+                (app_state.dataset_type or "").lower() == "comstock"
+                and col == mgr.config.floor_area_column
+            ):
+                slider_step = 1000.0
+
             lo, hi = st.slider(
                 label,
                 min_value=col_min,
                 max_value=col_max,
                 value=(default_lo, default_hi),
+                step=slider_step,
                 key=f"bf_{app_state.dataset_type}_{col}",
                 help=help_text,
             )
@@ -440,10 +450,4 @@ def render_building_filter_page(app_state: AppState) -> None:
         manager=mgr,
         metadata=geo_filtered,
         title="Upgrade Applicability Summary",
-    )
-
-    st.info(
-        f"Click **Run** (step 5) to download data for "
-        f"{app_state.building_count:,} buildings across "
-        f"{len(app_state.selected_upgrades)} scenario(s)."
     )
