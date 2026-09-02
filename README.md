@@ -32,7 +32,7 @@ After installation, restart your terminal so `pixi` is available on your `PATH`.
 ### 2. Clone the repository
 
 ```bash
-git clone https://github.com/NREL/buildstock-rate-impact-calculator.git
+git clone https://github.com/NatLabRockies/buildstock-rate-impact-calculator.git
 cd buildstock-rate-impact-calculator
 ```
 
