@@ -17,7 +17,7 @@ from buildstock_rate_impact_calculator.ui.sidebar_helpers import (
 from buildstock_rate_impact_calculator.ui.project_io import (
     load_project as _load_project,
 )
-from buildstock_rate_impact_calculator.ui import asyncio_windows_fix
+from buildstock_rate_impact_calculator.ui import asyncio_windows_fix, auto_exit
 
 # Configure the single package-level logger for the entire app session
 setup_logging()
@@ -25,6 +25,9 @@ setup_logging()
 # Keep Ctrl+C from hanging at "Stopping..." on Windows after a browser closes
 # its connection abruptly (see asyncio_windows_fix).
 asyncio_windows_fix.apply()
+
+# Stop the server once no browser tab has been connected for a while.
+auto_exit.start()
 
 
 _API_KEY_FILENAME = ".openei_api_key"
@@ -189,6 +192,36 @@ with st.sidebar:
         if st.button("Load", key="load_from_path"):
             if load_path_str:
                 _do_load_project(Path(load_path_str), app_state)
+
+    # ── Quit ──────────────────────────────────────────────────────────────────
+    st.divider()
+    if st.session_state.get("_app_stopping"):
+        st.info("The app has stopped. You can close this browser tab.")
+    elif not st.session_state.get("_confirm_quit"):
+        if st.button(
+            "⏻ Quit app",
+            key="quit_app",
+            use_container_width=True,
+            help="Stop the app server. Closing every browser tab also stops it "
+            f"after {auto_exit.GRACE_SECONDS // 60} minutes.",
+        ):
+            st.session_state["_confirm_quit"] = True
+            st.rerun()
+    else:
+        if auto_exit.run_in_progress():
+            st.warning("A run is in progress — quitting will cancel it.")
+        else:
+            st.caption("Stop the app? Unsaved rate editor entries will be lost.")
+        _quit_col, _cancel_col = st.columns(2)
+        if _quit_col.button("Quit", key="quit_confirm", type="primary"):
+            st.session_state["_app_stopping"] = True
+            st.session_state.pop("_confirm_quit", None)
+            # Delay so this run's "app has stopped" message reaches the browser.
+            auto_exit.request_shutdown(delay=1.0)
+            st.rerun()
+        if _cancel_col.button("Cancel", key="quit_cancel"):
+            st.session_state.pop("_confirm_quit", None)
+            st.rerun()
 
     # ── Debug (gated behind BRIC_DEBUG env var) ──────────────────────────────
     if os.getenv("BRIC_DEBUG"):

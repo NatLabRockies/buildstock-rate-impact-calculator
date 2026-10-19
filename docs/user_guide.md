@@ -153,6 +153,16 @@ Below it, **⚙ Setup** holds the data directory and OpenEI API key (expanded
 automatically until a key is stored), and **Project** holds the project name
 and the load-existing-project controls.
 
+### Stopping the app
+Click **⏻ Quit app** at the bottom of the sidebar (then **Quit** to confirm)
+to stop the app; you can then close the browser tab. Closing every browser
+tab also stops the app automatically after **2 minutes** — long enough to
+survive a page reload or a brief disconnect. It will not stop while a run is
+in progress; it waits until the run finishes. Pressing `Ctrl+C` in the
+terminal still works too. To keep the app running with no tab open (for
+example, when hosting it for several users), set the environment variable
+`BRIC_NO_AUTO_EXIT=1` before starting it.
+
 ---
 
 ## 3. Understanding weights

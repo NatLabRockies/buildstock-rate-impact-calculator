@@ -11,7 +11,13 @@ They require a working internet connection and will hit the OEDI S3 bucket.
 
 from __future__ import annotations
 
+import os
+
 import pytest
+
+# AppTest smoke tests execute app.py, which would otherwise start the
+# auto-exit watchdog (and could SIGINT the test process) — opt out.
+os.environ.setdefault("BRIC_NO_AUTO_EXIT", "1")
 
 
 # ---------------------------------------------------------------------------
