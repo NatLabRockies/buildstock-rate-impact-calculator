@@ -5,7 +5,9 @@ Phase 1 tests for AppState directory structure and config key changes.
 from __future__ import annotations
 from pathlib import Path
 
-from buildstock_rate_impact_calculator.ui.state import AppState
+import pytest
+
+from buildstock_rate_impact_calculator.ui.state import AppState, default_output_dir
 
 
 def test_project_dir_property():
@@ -128,3 +130,30 @@ def test_additional_columns_persisted_in_config_round_trip():
     restored = AppState()
     restored.apply_config_dict(config)
     assert restored.additional_columns == ["in.heating_setpoint", "in.vintage"]
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# default_output_dir
+# ───────────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def fake_home(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    return tmp_path
+
+
+def test_default_output_dir_uses_documents(fake_home):
+    (fake_home / "Documents").mkdir()
+    assert default_output_dir() == fake_home / "Documents" / "buildstock_results"
+    assert AppState().output_dir == default_output_dir()
+
+
+def test_default_output_dir_falls_back_to_home_without_documents(fake_home):
+    assert default_output_dir() == fake_home / "buildstock_results"
+
+
+def test_default_output_dir_keeps_existing_legacy_dir(fake_home):
+    (fake_home / "Documents").mkdir()
+    (fake_home / "buildstock_results").mkdir()
+    assert default_output_dir() == fake_home / "buildstock_results"

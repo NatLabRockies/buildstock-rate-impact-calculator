@@ -10,6 +10,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+_DATA_DIR_NAME = "buildstock_results"
+
+
+def default_output_dir() -> Path:
+    """Default Data Directory: ``~/Documents/buildstock_results``.
+
+    Falls back to the legacy ``~/buildstock_results`` if it already exists (so
+    existing users keep their cache, projects and stored API key), and to the
+    home directory when there is no ``Documents`` folder (e.g. minimal Linux).
+    """
+    home = Path.home()
+    legacy = home / _DATA_DIR_NAME
+    if legacy.is_dir():
+        return legacy
+    documents = home / "Documents"
+    base = documents if documents.is_dir() else home
+    return base / _DATA_DIR_NAME
+
 
 @dataclass
 class AppState:
@@ -82,7 +100,7 @@ class AppState:
     urdb_api_key: str = ""
 
     # ── Output ───────────────────────────────────────────────────────────────
-    output_dir: Path = field(default_factory=lambda: Path.home() / "buildstock_results")
+    output_dir: Path = field(default_factory=default_output_dir)
     project_name: str = ""
 
     @property
