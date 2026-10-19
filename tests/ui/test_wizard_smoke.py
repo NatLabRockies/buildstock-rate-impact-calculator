@@ -8,12 +8,16 @@ single-page render + header + footer nav assemble without error.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from streamlit.testing.v1 import AppTest
 
+APP_PATH = Path(__file__).resolve().parents[2] / "app.py"
+
 
 def test_app_boots_on_dataset_step() -> None:
-    at = AppTest.from_file("app.py", default_timeout=30)
+    at = AppTest.from_file(str(APP_PATH), default_timeout=30)
     at.run()
     assert not at.exception
     # The Dataset step's page header renders on a fresh session.
@@ -21,7 +25,7 @@ def test_app_boots_on_dataset_step() -> None:
 
 
 def test_nav_controls_present() -> None:
-    at = AppTest.from_file("app.py", default_timeout=30)
+    at = AppTest.from_file(str(APP_PATH), default_timeout=30)
     at.run()
     assert not at.exception
     keys = {b.key for b in at.button}
@@ -32,7 +36,7 @@ def test_nav_controls_present() -> None:
 
 
 def test_next_disabled_on_fresh_dataset_step() -> None:
-    at = AppTest.from_file("app.py", default_timeout=30)
+    at = AppTest.from_file(str(APP_PATH), default_timeout=30)
     at.run()
     assert not at.exception
     # Nothing selected yet → the Dataset step blocks advancing.
@@ -44,7 +48,7 @@ def test_next_advances_header_control_when_step_completes() -> None:
     """Regression: advancing must move the header indicator even when the click
     also flips the current step's label from a number to a ✓ (the completion
     mark change previously desynced the string-valued segmented control)."""
-    at = AppTest.from_file("app.py", default_timeout=30)
+    at = AppTest.from_file(str(APP_PATH), default_timeout=30)
     at.run()
     assert not at.exception
 

@@ -34,6 +34,9 @@ _STATES_GEOJSON_FILE = "us_states.geojson"
 _COUNTY_GEOJSON_FILE = "cb_2019_us_county_500k.geojson"
 _PUMA_GEOJSON_FILE = "cb_2019_us_puma10_500k.geojson"
 
+# Keyless basemap (xyzservices name). CARTO tiles now require an API key.
+_BASEMAP_TILES = "Esri.WorldGrayCanvas"
+
 # Map US state names (from GeoJSON) → FIPS abbreviations used in BuildStock
 _STATE_NAME_TO_ABBR: dict[str, str] = {
     "Alabama": "AL",
@@ -438,7 +441,7 @@ def _render_state_selection_view(
     m = folium.Map(
         location=[_vp["lat"], _vp["lng"]],
         zoom_start=_vp["zoom"],
-        tiles="CartoDB positron",
+        tiles=_BASEMAP_TILES,
     )
 
     # Split into two static-style layers — eliminates 51 per-feature Python
@@ -613,7 +616,7 @@ def _render_sub_level_view(selected_states: list[str], geo_level: str) -> None:
         bounds = None
 
     m = folium.Map(
-        location=[center_lat, center_lng], zoom_start=zoom, tiles="CartoDB positron"
+        location=[center_lat, center_lng], zoom_start=zoom, tiles=_BASEMAP_TILES
     )
     if bounds:
         m.fit_bounds(bounds)  # applied when streamlit-folium does execute JS
@@ -862,7 +865,7 @@ def _render_utility_county_map(statefps: list[str], matched_gisjoins: set[str]) 
 
     center_lat, center_lng = _bbox_center(filtered["features"])
     m = folium.Map(
-        location=[center_lat, center_lng], zoom_start=5, tiles="CartoDB positron"
+        location=[center_lat, center_lng], zoom_start=5, tiles=_BASEMAP_TILES
     )
 
     all_coords: list[list[float]] = []
