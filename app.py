@@ -17,9 +17,14 @@ from buildstock_rate_impact_calculator.ui.sidebar_helpers import (
 from buildstock_rate_impact_calculator.ui.project_io import (
     load_project as _load_project,
 )
+from buildstock_rate_impact_calculator.ui import asyncio_windows_fix
 
 # Configure the single package-level logger for the entire app session
 setup_logging()
+
+# Keep Ctrl+C from hanging at "Stopping..." on Windows after a browser closes
+# its connection abruptly (see asyncio_windows_fix).
+asyncio_windows_fix.apply()
 
 
 _API_KEY_FILENAME = ".openei_api_key"
