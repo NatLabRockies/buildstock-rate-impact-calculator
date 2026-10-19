@@ -311,3 +311,20 @@ with _next_col:
                 if not _ok:
                     st.stop()  # errors already rendered by the hook; stay put
             steps.goto_step(current + 1)
+
+# ── Scroll to top on step change ──────────────────────────────────────────────
+# Streamlit swaps the page content in place, so the main pane keeps its scroll
+# position (and browser scroll anchoring pins it to the footer buttons). Reset
+# it once on the run where the active step changes. The counter makes each
+# script element unique so React mounts it (and runs it) every time.
+if st.session_state.get("_last_rendered_step") != current:
+    st.session_state["_last_rendered_step"] = current
+    _n = st.session_state["_scroll_reset_count"] = (
+        st.session_state.get("_scroll_reset_count", 0) + 1
+    )
+    st.html(
+        f"<script>/* {_n} */"
+        "document.querySelector('[data-testid=\"stMain\"]')?.scrollTo(0, 0);"
+        "</script>",
+        unsafe_allow_javascript=True,
+    )
