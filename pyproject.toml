@@ -19,7 +19,8 @@ polars = ">=0.20"
 fsspec = "*"
 requests = "*"
 numpy = "*"
-pyarrow = "*"
+# Streamlit excludes pyarrow 25.0.0
+pyarrow = "!=25.0.0"
 tqdm = "*"
 python-dotenv = "*"
 pytest = "*"
@@ -34,7 +35,9 @@ pip-system-certs = ">=5.3,<6"
 [tool.pixi.pypi-dependencies]
 buildstock_rate_impact_calculator = { path = ".", editable = true }
 NREL-PySAM = "*"
-streamlit = ">=1.45"
+# 1.66+ is compatible with Starlette >=1.x GZip internals (older releases
+# raise "Expected ASGI message 'http.response.start'" on static assets).
+streamlit = ">=1.66"
 streamlit-folium = "*"
 folium = "*"
 altair = "*"
