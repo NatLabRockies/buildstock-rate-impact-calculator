@@ -106,6 +106,24 @@ def _fmt_ts(ts: object) -> str:
         return "—"
 
 
+def add_urdb_rate(rate_library: dict[str, dict], rate: dict) -> str:
+    """Add a fetched URDB rate to *rate_library* and return its library key.
+
+    The library is keyed by the rate's ``name`` (projects reload rates by
+    name), but URDB often has several versions of a tariff with the same name.
+    If the name is already taken by a rate with a different URDB label, the
+    new rate is renamed ``"<name> (<label>)"`` so neither is overwritten.
+    Re-adding the same label replaces the existing entry.
+    """
+    name = rate.get("name") or f"URDB Rate {len(rate_library) + 1}"
+    existing = rate_library.get(name)
+    if existing is not None and existing.get("label") != rate.get("label"):
+        name = f"{name} ({rate.get('label', len(rate_library) + 1)})"
+    rate["name"] = name
+    rate_library[name] = rate
+    return name
+
+
 def _get_urdb_client(api_key: str):
     """Return a URDBClient for *api_key*."""
     from buildstock_rate_impact_calculator.rates.urdb_client import URDBClient
@@ -113,7 +131,7 @@ def _get_urdb_client(api_key: str):
     return URDBClient(api_key=api_key)
 
 
-def render_urdb_search(api_key: str, dataset_type: str = "resstock") -> Optional[dict]:
+def render_urdb_search(api_key: str, dataset_type: str = "resstock") -> list[dict]:
     """
     Render a URDB rate search UI.
 
@@ -123,15 +141,15 @@ def render_urdb_search(api_key: str, dataset_type: str = "resstock") -> Optional
     Step 2 — "Search Rates" calls the URDB rates API with the selected utility's
     label as the ``ratesforutility`` parameter.
 
-    Step 3 — the user picks a rate from the results table and clicks
-    "Add selected rate" to return the full rate dict.
+    Step 3 — the user checks the Select box on one or more rows of the
+    results table and clicks "Add selected rates" to fetch the full rate dicts.
 
     Args:
         api_key: OpenEI API key (from sidebar).
         dataset_type: 'resstock' or 'comstock', used to default the sector filter.
 
     Returns:
-        Selected rate dict or None.
+        Full rate dicts fetched this run (empty unless the add button was clicked).
     """
 
     st.markdown(
@@ -150,7 +168,7 @@ def render_urdb_search(api_key: str, dataset_type: str = "resstock") -> Optional
     if search_query and "urdb_utility_companies" not in st.session_state:
         if not api_key:
             st.error("Enter your OpenEI API key in the sidebar before searching.")
-            return None
+            return []
         try:
             client = _get_urdb_client(api_key)
             with st.spinner("Loading utility list…"):
@@ -158,14 +176,14 @@ def render_urdb_search(api_key: str, dataset_type: str = "resstock") -> Optional
             st.session_state["urdb_utility_companies"] = companies
         except Exception as exc:
             st.error(f"Failed to load utility list: {exc}")
-            return None
+            return []
 
     if not search_query:
-        return None
+        return []
 
     companies: list = st.session_state.get("urdb_utility_companies", [])
     if not companies:
-        return None
+        return []
 
     # Substring match on label (case-insensitive); word-by-word fallback
     q = search_query.lower()
@@ -178,7 +196,7 @@ def render_urdb_search(api_key: str, dataset_type: str = "resstock") -> Optional
 
     if not matches:
         st.caption("No matching utilities found. Try a different search term.")
-        return None
+        return []
 
     # Cap dropdown at 50 entries for performance
     match_labels = [c["label"] for c in matches[:50]]
@@ -236,9 +254,11 @@ def render_urdb_search(api_key: str, dataset_type: str = "resstock") -> Optional
     if st.button("Search Rates", key="urdb_search_btn"):
         if not api_key:
             st.error("Enter your OpenEI API key in the sidebar before searching.")
-            return None
+            return []
         st.session_state.pop("urdb_search_results", None)
-        st.session_state.pop("urdb_selected_idx", None)
+        st.session_state["urdb_table_ver"] = (
+            st.session_state.get("urdb_table_ver", 0) + 1
+        )
         try:
             import datetime as _dt
 
@@ -282,14 +302,14 @@ def render_urdb_search(api_key: str, dataset_type: str = "resstock") -> Optional
             st.rerun()
         except Exception as exc:
             st.error(f"URDB search failed: {exc}")
-            return None
+            return []
 
     # ── Step 3: display results and let user load a rate ──────────────────────
     results = st.session_state.get("urdb_search_results", [])
     if not results:
         if "urdb_search_results" in st.session_state:
             st.info("No rates found for this utility. Try selecting a different entry.")
-        return None
+        return []
 
     # Apply client-side default-only filter based on the is_default field in results
     if default_only:
@@ -298,69 +318,102 @@ def render_urdb_search(api_key: str, dataset_type: str = "resstock") -> Optional
             st.info(
                 "No default rates found for this utility. Uncheck 'Default rates only' to see all rates."
             )
-            return None
+            return []
+
+    # Only rates with a URDB label can be fetched and added.
+    results = [r for r in results if r.get("label")]
+    if not results:
+        return []
+
+    # Bumping the version re-keys the table, which clears its checkboxes.
+    table_key = (
+        f"urdb_results_table_{st.session_state.get('urdb_table_ver', 0)}"
+        f"_{int(default_only)}"
+    )
 
     st.markdown("**Search results:**")
-    display_rows = [
-        {
-            "Name": r.get("name", "—"),
-            "Start Date": _fmt_ts(r.get("startdate")),
-            "End Date": _fmt_ts(r.get("enddate")),
-            "Label": (
-                f"https://apps.openei.org/IURDB/rate/view/{r['label']}"
-                if r.get("label")
-                else None
-            ),
-        }
-        for r in results
-    ]
-    df = pd.DataFrame(display_rows)
-    st.dataframe(
+    st.caption(
+        "Check the box in the **Select** column for each rate you want to add "
+        "to the project, then click **Add selected rates**."
+    )
+    df = pd.DataFrame(
+        [
+            {
+                "Select": False,
+                "Name": r.get("name", "—"),
+                "Start Date": _fmt_ts(r.get("startdate")),
+                "End Date": _fmt_ts(r.get("enddate")),
+                "Label": f"https://apps.openei.org/IURDB/rate/view/{r['label']}",
+            }
+            for r in results
+        ]
+    )
+    edited = st.data_editor(
         df,
         width="stretch",
         hide_index=True,
         column_config={
+            "Select": st.column_config.CheckboxColumn(
+                "Select", help="Check to add this rate to the project"
+            ),
             "Label": st.column_config.LinkColumn(
                 "Label",
                 help="Open this rate on the OpenEI Utility Rate Database",
                 display_text=r"/IURDB/rate/view/(.+)$",
             ),
         },
+        disabled=["Name", "Start Date", "End Date", "Label"],
+        key=table_key,
     )
+    selected = [r for r, checked in zip(results, edited["Select"]) if checked]
 
-    label_options = [r.get("label", "") for r in results if r.get("label")]
-    name_options = [
-        f"{r.get('name', '?')} ({r.get('utility', '?')})"
-        for r in results
-        if r.get("label")
-    ]
-    if not label_options:
-        return None
+    st.markdown(f"**Rates to add ({len(selected)}):**")
+    if selected:
+        st.markdown(
+            "\n".join(
+                f"- {r.get('name', '?')} ({r['label']}, from "
+                f"{_fmt_ts(r.get('startdate'))})"
+                for r in selected
+            )
+        )
+    else:
+        st.caption("No rates selected.")
 
-    st.markdown("**Select Rate to Load:**")
-    chosen_idx = st.selectbox(
-        "Select rate:",
-        options=range(len(name_options)),
-        format_func=lambda i: name_options[i],
-        key="urdb_selected_idx",
-        label_visibility="collapsed",
+    add_clicked = st.button(
+        "Add selected rates",
+        type="primary",
+        key="urdb_load_btn",
+        disabled=not selected,
     )
+    # Confirmation from the previous run's add (set below, shown after rerun).
+    added_msg = st.session_state.pop("urdb_added_msg", None)
+    if added_msg:
+        st.success(added_msg)
+    if not add_clicked:
+        return []
 
-    if st.button("Add selected rate", type='primary', key="urdb_load_btn"):
-        chosen_label = label_options[chosen_idx]
+    client = _get_urdb_client(api_key)
+    loaded: list[dict] = []
+    for r in selected:
         try:
-            client = _get_urdb_client(api_key)
-            with st.spinner("Fetching full rate data…"):
-                full_rate = client.get_rate_by_label(chosen_label)
-            if full_rate:
-                st.success(f"Loaded: {full_rate.get('name', chosen_label)}")
-                return full_rate
-            else:
-                st.error("Could not fetch full rate data.")
+            with st.spinner(f"Fetching {r.get('name', r['label'])}…"):
+                full_rate = client.get_rate_by_label(r["label"])
         except Exception as exc:
-            st.error(f"Failed to load rate: {exc}")
+            st.error(f"Failed to load {r.get('name', r['label'])}: {exc}")
+            continue
+        if full_rate:
+            loaded.append(full_rate)
+        else:
+            st.error(f"Could not fetch full rate data for {r['label']}.")
 
-    return None
+    if loaded:
+        st.session_state["urdb_table_ver"] = (
+            st.session_state.get("urdb_table_ver", 0) + 1
+        )
+        st.session_state["urdb_added_msg"] = "Added: " + ", ".join(
+            f"{r.get('name', '?')} ({r.get('label', '?')})" for r in loaded
+        )
+    return loaded
 
 
 def _row_ids(prefix: str) -> list[int]:

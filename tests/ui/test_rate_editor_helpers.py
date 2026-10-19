@@ -5,6 +5,7 @@ Tests for the pure schedule-construction helpers used by the TOU rate builder UI
 from __future__ import annotations
 
 from buildstock_rate_impact_calculator.ui.components.rate_editor import (
+    add_urdb_rate,
     build_flat_demand,
     build_tou_schedules,
 )
@@ -87,3 +88,32 @@ def test_flat_demand_later_rows_overwrite():
     assert months[5] == 0  # June from first row
     assert months[6] == 1  # July overwritten by second row
     assert months[7] == 1  # August from second row
+
+
+# ── add_urdb_rate ─────────────────────────────────────────────────────────────
+
+
+def test_add_urdb_rate_keys_by_name():
+    library: dict[str, dict] = {}
+    key = add_urdb_rate(library, {"name": "Residential", "label": "aaa"})
+    assert key == "Residential"
+    assert library["Residential"]["label"] == "aaa"
+
+
+def test_add_urdb_rate_same_name_different_label_is_suffixed():
+    """Two URDB versions sharing a name must not overwrite each other."""
+    library: dict[str, dict] = {}
+    add_urdb_rate(library, {"name": "Residential", "label": "aaa"})
+    key = add_urdb_rate(library, {"name": "Residential", "label": "bbb"})
+    assert key == "Residential (bbb)"
+    assert set(library) == {"Residential", "Residential (bbb)"}
+    # Library key and the rate's own name stay in sync (projects reload by name).
+    assert library[key]["name"] == key
+
+
+def test_add_urdb_rate_same_label_replaces():
+    library: dict[str, dict] = {}
+    add_urdb_rate(library, {"name": "Residential", "label": "aaa", "v": 1})
+    add_urdb_rate(library, {"name": "Residential", "label": "aaa", "v": 2})
+    assert list(library) == ["Residential"]
+    assert library["Residential"]["v"] == 2

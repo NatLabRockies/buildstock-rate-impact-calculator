@@ -100,9 +100,21 @@ filters; a warning appears below 30 models (see
 
 ### Step 4 — Rates
 Build the rate library (fetch URDB tariffs by utility/label, or construct
-flat/TOU/tiered/demand rates in the editor), then assign one **or more**
-electricity rates to each scenario with the per-scenario multiselect. The
-first rate you pick for a scenario is its primary rate; any additional rates
+flat/TOU/tiered/demand rates in the editor).
+
+To add URDB rates, open the **🔍 Search URDB** tab, type part of a utility's
+name, pick the utility, adjust the search filters (sector, service type,
+effective date, default rates only), and click **Search Rates**. In the
+results table, check the box in the **Select** column for each rate you want
+to add — you can select several at once. The selected rates are listed under
+**Rates to add**; click **Add selected rates** to fetch them into the
+project. The **Label** column links to each rate's page on OpenEI. URDB often
+lists several versions of a tariff under the same name; if a selected rate's
+name is already in the library, the new one is added as
+`<name> (<URDB label>)` so neither is overwritten.
+
+Then assign one **or more** electricity rates to each scenario with the
+per-scenario multiselect. The first rate you pick for a scenario is its primary rate; any additional rates
 bill that scenario again (a rate sweep) and populate the Rate Comparison
 matrix — runtime scales with the total number of rate assignments. Pick
 **✨ All Configured Rates** to bill a scenario under every rate at once.
