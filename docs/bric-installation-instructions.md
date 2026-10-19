@@ -80,7 +80,7 @@ If you already have **git** installed and know how to use it, you can use the `g
 In your terminal, copy and paste the following commands, then press Enter after each line:
 
 ```bash
-git clone https://github.com/NREL/buildstock-rate-impact-calculator.git
+git clone https://github.com/NatLabRockies/buildstock-rate-impact-calculator.git
 cd buildstock-rate-impact-calculator
 ```
 
@@ -209,4 +209,4 @@ If you are contributing to the project, run these commands from the project fold
 
 ## License
 
-See the LICENSE file in this repository for details.
+See the [LICENSE](../LICENSE.md) file in this repository for details.

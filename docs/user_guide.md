@@ -2,7 +2,7 @@
 
 The BuildStock Rate Impact Calculator estimates how utility rate structures
 and building efficiency upgrades interact to affect customer energy bills
-across a region. It combines NREL's ResStock (residential) and ComStock
+across a region. It combines NLR's ResStock (residential) and ComStock
 (commercial) building-stock simulation datasets with PySAM's utility-rate
 engine to bill thousands of simulated buildings under real or custom
 tariffs — before and after an upgrade, and optionally under several
@@ -23,7 +23,7 @@ through every section of the Results page with guidance on interpretation.
 
 ## 1. Concepts
 
-**Datasets.** ResStock and ComStock are NREL simulations of the U.S.
+**Datasets.** ResStock and ComStock are NLR simulations of the U.S.
 residential and commercial building stock. Each dataset release contains
 tens of thousands of *building models* — statistically sampled combinations
 of building characteristics — with simulated energy use at 15-minute

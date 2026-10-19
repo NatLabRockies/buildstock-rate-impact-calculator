@@ -78,4 +78,4 @@ Some rate-lookup features require a free API key from OpenEI:
 
 ## License
 
-See [LICENSE](LICENSE) for details.
+See [LICENSE](LICENSE.md) for details.
