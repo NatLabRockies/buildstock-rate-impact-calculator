@@ -100,9 +100,21 @@ filters; a warning appears below 30 models (see
 
 ### Step 4 — Rates
 Build the rate library (fetch URDB tariffs by utility/label, or construct
-flat/TOU/tiered/demand rates in the editor), then assign one **or more**
-electricity rates to each scenario with the per-scenario multiselect. The
-first rate you pick for a scenario is its primary rate; any additional rates
+flat/TOU/tiered/demand rates in the editor).
+
+To add URDB rates, open the **🔍 Search URDB** tab, type part of a utility's
+name, pick the utility, adjust the search filters (sector, service type,
+effective date, default rates only), and click **Search Rates**. In the
+results table, check the box in the **Select** column for each rate you want
+to add — you can select several at once. The selected rates are listed under
+**Rates to add**; click **Add selected rates** to fetch them into the
+project. The **Label** column links to each rate's page on OpenEI. URDB often
+lists several versions of a tariff under the same name; if a selected rate's
+name is already in the library, the new one is added as
+`<name> (<URDB label>)` so neither is overwritten.
+
+Then assign one **or more** electricity rates to each scenario with the
+per-scenario multiselect. The first rate you pick for a scenario is its primary rate; any additional rates
 bill that scenario again (a rate sweep) and populate the Rate Comparison
 matrix — runtime scales with the total number of rate assignments. Pick
 **✨ All Configured Rates** to bill a scenario under every rate at once.
@@ -140,6 +152,16 @@ mark and a summary of your selections; click any line to jump to that step.
 Below it, **⚙ Setup** holds the data directory and OpenEI API key (expanded
 automatically until a key is stored), and **Project** holds the project name
 and the load-existing-project controls.
+
+### Stopping the app
+Click **⏻ Quit app** at the bottom of the sidebar (then **Quit** to confirm)
+to stop the app; you can then close the browser tab. Closing every browser
+tab also stops the app automatically after **2 minutes** — long enough to
+survive a page reload or a brief disconnect. It will not stop while a run is
+in progress; it waits until the run finishes. Pressing `Ctrl+C` in the
+terminal still works too. To keep the app running with no tab open (for
+example, when hosting it for several users), set the environment variable
+`BRIC_NO_AUTO_EXIT=1` before starting it.
 
 ---
 

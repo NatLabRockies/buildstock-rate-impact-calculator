@@ -17,9 +17,17 @@ from buildstock_rate_impact_calculator.ui.sidebar_helpers import (
 from buildstock_rate_impact_calculator.ui.project_io import (
     load_project as _load_project,
 )
+from buildstock_rate_impact_calculator.ui import asyncio_windows_fix, auto_exit
 
 # Configure the single package-level logger for the entire app session
 setup_logging()
+
+# Keep Ctrl+C from hanging at "Stopping..." on Windows after a browser closes
+# its connection abruptly (see asyncio_windows_fix).
+asyncio_windows_fix.apply()
+
+# Stop the server once no browser tab has been connected for a while.
+auto_exit.start()
 
 
 _API_KEY_FILENAME = ".openei_api_key"
@@ -185,6 +193,36 @@ with st.sidebar:
             if load_path_str:
                 _do_load_project(Path(load_path_str), app_state)
 
+    # ── Quit ──────────────────────────────────────────────────────────────────
+    st.divider()
+    if st.session_state.get("_app_stopping"):
+        st.info("The app has stopped. You can close this browser tab.")
+    elif not st.session_state.get("_confirm_quit"):
+        if st.button(
+            "⏻ Quit app",
+            key="quit_app",
+            use_container_width=True,
+            help="Stop the app server. Closing every browser tab also stops it "
+            f"after {auto_exit.GRACE_SECONDS // 60} minutes.",
+        ):
+            st.session_state["_confirm_quit"] = True
+            st.rerun()
+    else:
+        if auto_exit.run_in_progress():
+            st.warning("A run is in progress — quitting will cancel it.")
+        else:
+            st.caption("Stop the app? Unsaved rate editor entries will be lost.")
+        _quit_col, _cancel_col = st.columns(2)
+        if _quit_col.button("Quit", key="quit_confirm", type="primary"):
+            st.session_state["_app_stopping"] = True
+            st.session_state.pop("_confirm_quit", None)
+            # Delay so this run's "app has stopped" message reaches the browser.
+            auto_exit.request_shutdown(delay=1.0)
+            st.rerun()
+        if _cancel_col.button("Cancel", key="quit_cancel"):
+            st.session_state.pop("_confirm_quit", None)
+            st.rerun()
+
     # ── Debug (gated behind BRIC_DEBUG env var) ──────────────────────────────
     if os.getenv("BRIC_DEBUG"):
         st.divider()
@@ -311,3 +349,20 @@ with _next_col:
                 if not _ok:
                     st.stop()  # errors already rendered by the hook; stay put
             steps.goto_step(current + 1)
+
+# ── Scroll to top on step change ──────────────────────────────────────────────
+# Streamlit swaps the page content in place, so the main pane keeps its scroll
+# position (and browser scroll anchoring pins it to the footer buttons). Reset
+# it once on the run where the active step changes. The counter makes each
+# script element unique so React mounts it (and runs it) every time.
+if st.session_state.get("_last_rendered_step") != current:
+    st.session_state["_last_rendered_step"] = current
+    _n = st.session_state["_scroll_reset_count"] = (
+        st.session_state.get("_scroll_reset_count", 0) + 1
+    )
+    st.html(
+        f"<script>/* {_n} */"
+        "document.querySelector('[data-testid=\"stMain\"]')?.scrollTo(0, 0);"
+        "</script>",
+        unsafe_allow_javascript=True,
+    )

@@ -165,7 +165,7 @@ Each time you want to run the app again later:
 2. Move into the project folder.
 3. Run `pixi run app`.
 
-Leave the terminal open while the app is running. To stop the app, press `Ctrl+C` in the terminal.
+Leave the terminal open while the app is running. To stop the app, click **⏻ Quit app** at the bottom of the app's sidebar, or press `Ctrl+C` in the terminal. The app also stops on its own about 2 minutes after you close its last browser tab.
 
 ## OpenEI API key (optional)
 

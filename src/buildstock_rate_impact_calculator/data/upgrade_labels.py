@@ -17,6 +17,25 @@ _UPGRADES_FILENAME = "upgrades_lookup.json"
 # Module-level cache: base_uri -> {upgrade_id -> label}
 _label_cache: Dict[str, Dict[int, str]] = {}
 
+# Known typos in published upgrades_lookup.json files:
+# (base_uri suffix, upgrade_id) -> (published label, corrected label).
+# Applied only while the published label still matches, so an upstream fix
+# makes the correction a no-op.
+_LABEL_CORRECTIONS: dict[tuple[str, int], tuple[str, str]] = {
+    ("2025/resstock_amy2018_release_1", 9): (
+        "Heat Pumps Water Heater",
+        "Heat Pump Water Heater",
+    ),
+}
+
+
+def _apply_label_corrections(base_uri: str, labels: dict[int, str]) -> None:
+    """Fix known typos in *labels* (in place) for the dataset at *base_uri*."""
+    base = base_uri.rstrip("/")
+    for (suffix, upgrade_id), (wrong, right) in _LABEL_CORRECTIONS.items():
+        if base.endswith(suffix) and labels.get(upgrade_id) == wrong:
+            labels[upgrade_id] = right
+
 
 def fetch_upgrade_labels(base_uri: str) -> Dict[int, str]:
     """
@@ -41,6 +60,7 @@ def fetch_upgrade_labels(base_uri: str) -> Dict[int, str]:
         response.raise_for_status()
         raw: Dict[str, str] = response.json()
         labels: Dict[int, str] = {int(k): v for k, v in raw.items()}
+        _apply_label_corrections(base_uri, labels)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Could not fetch upgrade labels from %s: %s", url, exc)
         labels = {}

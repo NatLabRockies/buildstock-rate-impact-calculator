@@ -23,6 +23,7 @@ from buildstock_rate_impact_calculator.ui.project_io import (
     save_project as _save_project,
 )
 from buildstock_rate_impact_calculator.ui.components.rate_editor import (
+    add_urdb_rate,
     render_urdb_search,
     render_tou_builder,
     render_flat_rate_form,
@@ -257,14 +258,15 @@ def render_rates_page(app_state: AppState) -> None:
     )
 
     with urdb_tab, st.container(border=True):
-        new_rate = render_urdb_search(
+        new_rates = render_urdb_search(
             api_key=app_state.urdb_api_key, dataset_type=app_state.dataset_type
         )
-        if new_rate:
-            key = new_rate.get("name", f"URDB Rate {len(rate_library) + 1}")
-            rate_library[key] = new_rate
+        for new_rate in new_rates:
+            add_urdb_rate(rate_library, new_rate)
+        if new_rates:
             if app_state.project_name:
                 _save_project(app_state)
+            st.rerun()
 
     with tou_tab, st.container(border=True):
         new_rate = render_tou_builder()

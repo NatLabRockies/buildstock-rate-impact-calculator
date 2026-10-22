@@ -15,7 +15,7 @@ import streamlit as st
 import polars as pl
 
 from buildstock_rate_impact_calculator.ui.state import AppState
-from buildstock_rate_impact_calculator.ui import steps
+from buildstock_rate_impact_calculator.ui import auto_exit, steps
 from buildstock_rate_impact_calculator.ui.project_io import (
     save_project as _save_project,
 )
@@ -1185,6 +1185,7 @@ def render_run_page(app_state: AppState) -> None:
                     _resolved_scenario_comparisons,
                 ),
                 daemon=True,
+                name=auto_exit.PIPELINE_THREAD_NAME,
             )
             st.session_state["run_tracker"] = new_tracker
             st.session_state["run_thread"] = new_thread
