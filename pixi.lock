@@ -2094,8 +2094,8 @@ packages:
   timestamp: 1788480494687
 - pypi: ./
   name: buildstock-rate-impact-calculator
-  version: 0.1.0
-  sha256: 63c24da89cf8b8bf3c03c07f1a9e94734f403c082e29ff19a60e67bc80cb5160
+  version: 0.9.0
+  sha256: fd884d9789393f3d2316f16cdd753b7815a852fdc5299155d53b73ad08733e67
   requires_python: '>=3.11,<3.14'
 - conda: https://conda.anaconda.org/conda-forge/linux-64/bzip2-1.0.8-hda65f42_10.conda
   sha256: 1a0d382c515ebf55f8ee1f38c8b81bc95af5c2acc42ad53b66bc5df932032f96
