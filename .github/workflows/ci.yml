@@ -113,7 +113,17 @@ jobs:
       - name: Start app (macOS / Linux)
         if: runner.os != 'Windows'
         run: |
-          script=$(ls BRIC-*/"Start BRIC.command" BRIC-*/start-bric.sh 2>/dev/null | head -1)
+          script=
+          for candidate in BRIC-*/"Start BRIC.command" BRIC-*/start-bric.sh; do
+            if [[ -f "$candidate" ]]; then
+              script=$candidate
+              break
+            fi
+          done
+          if [[ -z "$script" ]]; then
+            echo "::error::No start script found in extracted archive"
+            exit 1
+          fi
           nohup "$script" --no-browser --port 8599 > bric.log 2> bric.err < /dev/null &
 
       - name: Wait for the app to answer
