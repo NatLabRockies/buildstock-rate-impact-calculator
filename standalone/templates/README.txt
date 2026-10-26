@@ -17,6 +17,9 @@ Where things are stored
 -----------------------
 - The app itself: @INSTALL_DIR@
   Delete this folder to uninstall.
+- Logs of recent runs: @LOG_DIR@
+  If the app stops unexpectedly, the window shows the end of the latest log;
+  please send that file to the BRIC developers.
 - Your downloaded data, projects and OpenEI API key: the "Data Directory"
   shown in the app's Setup panel (by default Documents/buildstock_results).
   Upgrading or uninstalling the app does not touch it.

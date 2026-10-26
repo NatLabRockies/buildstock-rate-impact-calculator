@@ -20,6 +20,7 @@ See ``standalone/README.md`` for the release process.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 import shutil
 import stat
@@ -48,6 +49,7 @@ class Target:
     start_file: str  # name of the double-click script in the zip
     template: str  # file in templates/
     install_dir: str  # shown in README.txt; must match the start script
+    log_dir: str  # shown in README.txt; must match launcher.default_log_dir()
     security_note: str
 
     @property
@@ -65,6 +67,7 @@ _MAC_NOTE = (
     "then Open again. You only need to do this once."
 )
 _MAC_DIR = "~/Library/Application Support/BRIC"
+_MAC_LOG_DIR = "~/Library/Logs/BRIC"
 
 TARGETS: dict[str, Target] = {
     "win-64": Target(
@@ -72,6 +75,7 @@ TARGETS: dict[str, Target] = {
         start_file="Start BRIC.cmd",
         template="start-bric.cmd",
         install_dir=r"%LOCALAPPDATA%\BRIC",
+        log_dir=r"%LOCALAPPDATA%\BRIC\logs",
         security_note=(
             'If Windows shows "Windows protected your PC", click "More info" and\n'
             'then "Run anyway". If it shows an "Open File - Security Warning",\n'
@@ -84,6 +88,7 @@ TARGETS: dict[str, Target] = {
         start_file="Start BRIC.command",
         template="start-bric.sh",
         install_dir=_MAC_DIR,
+        log_dir=_MAC_LOG_DIR,
         security_note=_MAC_NOTE,
     ),
     "osx-64": Target(
@@ -91,6 +96,7 @@ TARGETS: dict[str, Target] = {
         start_file="Start BRIC.command",
         template="start-bric.sh",
         install_dir=_MAC_DIR,
+        log_dir=_MAC_LOG_DIR,
         security_note=_MAC_NOTE,
     ),
     "linux-64": Target(
@@ -99,6 +105,7 @@ TARGETS: dict[str, Target] = {
         start_file="start-bric.sh",
         template="start-bric.sh",
         install_dir="~/.local/share/BRIC",
+        log_dir="~/.local/state/BRIC",
         security_note=(
             "Start it from a terminal with ./start-bric.sh if your file manager\n"
             "opens it in a text editor instead of running it."
@@ -153,6 +160,20 @@ def zip_folder(folder: Path, zip_path: Path, executables: set[str]) -> None:
             )
             with path.open("rb") as src, zf.open(info, "w") as dst:
                 shutil.copyfileobj(src, dst, 1024 * 1024)
+
+
+def build_id(environment_tar: Path) -> str:
+    """Short content hash of the packed environment.
+
+    The start scripts store it in the install marker and re-unpack when it
+    changes, so a rebuilt zip of the same version (e.g. a dependency fix)
+    replaces the old environment.
+    """
+    digest = hashlib.sha256()
+    with environment_tar.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()[:12]
 
 
 def build_wheel(out_dir: Path) -> Path:
@@ -232,6 +253,7 @@ def build_platform(
     start = render_template(
         (TEMPLATES / target.template).read_text(encoding="utf-8"),
         bric_version=version,
+        bric_build=build_id(stage / "environment.tar"),
     )
     write_text(stage / target.start_file, start, target.is_windows)
     readme = render_template(
@@ -240,6 +262,7 @@ def build_platform(
         bric_platform=platform,
         start_file=target.start_file,
         install_dir=target.install_dir,
+        log_dir=target.log_dir,
         security_note=target.security_note,
     )
     write_text(stage / "README.txt", readme, target.is_windows)

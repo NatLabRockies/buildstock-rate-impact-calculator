@@ -21,14 +21,17 @@ BRIC-<version>-<platform>/
 
 When the user double-clicks the start script:
 
-1. **First run of a version only:** `pixi-unpack` installs the environment into
+1. **First run of a build only:** `pixi-unpack` installs the environment into
    a per-user folder, `%LOCALAPPDATA%\BRIC\<version>` (Windows),
    `~/Library/Application Support/BRIC/<version>` (macOS) or
    `~/.local/share/BRIC/<version>` (Linux), then writes a `.bric-unpacked`
-   marker. A folder without the marker (interrupted setup) is redone. Other
-   versions' folders are then deleted. About 1–2 minutes and 2.3 GB (Windows).
-   The environment is not unpacked beside the script: Desktop/Documents are
-   often OneDrive-synced, and an unpacked environment can't be moved.
+   marker holding the build ID (a hash of `environment.tar`, baked into the
+   start script by `build_dist.py`). A missing marker (interrupted setup) or a
+   different build ID (a rebuilt zip of the same version) is unpacked again.
+   Other versions' folders are then deleted. About 1–2 minutes and 2.3 GB
+   (Windows). The environment is not unpacked beside the script:
+   Desktop/Documents are often OneDrive-synced, and an unpacked environment
+   can't be moved.
 2. The script activates the environment and runs `bric`, the console script
    for [`launcher.py`](../src/buildstock_rate_impact_calculator/launcher.py).
    It starts Streamlit headless on a free `127.0.0.1` port and opens the
@@ -36,6 +39,19 @@ When the user double-clicks the start script:
    script are passed to `bric` (`--no-browser`, `--port N`).
 3. The app stops on **⏻ Quit app** or about 2 minutes after the last browser
    tab closes (`ui/auto_exit.py`), and the start script exits.
+4. **If it stops with any other exit code** (including negative Windows crash
+   codes such as `0xC0000005`), the script shows the code and the end of the
+   run's log, then waits for a key press.
+
+### Logs
+
+`bric` copies its console output to a new log file per run and enables
+`faulthandler`, which writes every thread's Python stack there on a native
+crash. The last 10 logs are kept in `%LOCALAPPDATA%\BRIC\logs` (Windows),
+`~/Library/Logs/BRIC` (macOS) or `~/.local/state/BRIC` (Linux); set
+`BRIC_LOG_DIR` to use another folder. Windows also records native crashes in
+the Application event log (Event Viewer → Windows Logs → Application,
+"Application Error" for `python.exe`), with the faulting module and offset.
 
 User data (cache, projects, OpenEI key) stays in the app's Data Directory
 (`~/Documents/buildstock_results` by default), so updates and uninstalls never
@@ -85,6 +101,15 @@ so any green run's downloads can be tried before releasing.
    points at the latest published release.
 
 ## Notes and limitations
+
+- **polars is pinned to 1.41.2.** polars 1.42 and later (including 2.x)
+  bundle mimalloc 3.3.2, which crashes Windows processes with an access
+  violation in `_polars_runtime.pyd` when a thread that used polars exits
+  ([pola-rs/polars#29883](https://github.com/pola-rs/polars/issues/29883)).
+  BRIC starts and ends such threads on every Streamlit rerun and download, so
+  the stand-alone app crashed after a few minutes of use. Lift the pin once a
+  polars release bundles mimalloc 3.4.1 or later (check `libmimalloc-sys` in
+  polars' `Cargo.lock`: it must be newer than 0.1.49).
 
 - **Unsigned.** Windows SmartScreen and macOS Gatekeeper warn on first start;
   the install docs and `README.txt` explain how to proceed. Code signing

@@ -44,7 +44,9 @@ def test_templates_render_for_every_platform(platform: str) -> None:
     target = build_dist.TARGETS[platform]
     templates = build_dist.TEMPLATES
     build_dist.render_template(
-        (templates / target.template).read_text(encoding="utf-8"), bric_version="1"
+        (templates / target.template).read_text(encoding="utf-8"),
+        bric_version="1",
+        bric_build="abc123",
     )
     build_dist.render_template(
         (templates / "README.txt").read_text(encoding="utf-8"),
@@ -52,8 +54,19 @@ def test_templates_render_for_every_platform(platform: str) -> None:
         bric_platform=platform,
         start_file=target.start_file,
         install_dir=target.install_dir,
+        log_dir=target.log_dir,
         security_note=target.security_note,
     )
+
+
+def test_build_id_tracks_content(tmp_path: Path) -> None:
+    tar = tmp_path / "environment.tar"
+    tar.write_bytes(b"one")
+    first = build_dist.build_id(tar)
+    assert len(first) == 12
+    assert build_dist.build_id(tar) == first
+    tar.write_bytes(b"two")
+    assert build_dist.build_id(tar) != first
 
 
 def test_write_text_line_endings(tmp_path: Path) -> None:

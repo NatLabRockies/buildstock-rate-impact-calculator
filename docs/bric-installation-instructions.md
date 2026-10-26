@@ -65,6 +65,14 @@ The app isn't signed with a Microsoft or Apple certificate yet, so the first sta
 
 Updating or uninstalling never touches your downloaded data, projects or saved OpenEI API key. These live in the **Data Directory** shown in the app's **⚙ Setup** panel (by default `Documents/buildstock_results`).
 
+### If the app stops unexpectedly
+
+If the app stops on its own (the browser shows a connection error), the text window stays open and shows the end of the app's log. Please send that log file to the BRIC developers. Logs of the last 10 runs are kept in:
+
+- Windows: `%LOCALAPPDATA%\BRIC\logs`
+- macOS: `~/Library/Logs/BRIC`
+- Linux: `~/.local/state/BRIC`
+
 Next, set up your [OpenEI API key](#openei-api-key-optional).
 
 ## Option 2 – Install with pixi
