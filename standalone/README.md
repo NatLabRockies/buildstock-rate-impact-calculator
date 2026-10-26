@@ -59,21 +59,30 @@ pointed at a scratch folder, for example:
 LOCALAPPDATA=C:/temp/bric-test cmd //c "dist\\BRIC-0.1.0-win-64\\Start BRIC.cmd" --no-browser --port 8599
 ```
 
+## CI
+
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs on every pull
+request, every push to `main`, and by hand (**Actions → CI → Run workflow**):
+
+1. **test**: the test suite on Linux and Windows.
+2. **pack**: `pixi run --locked pack` builds all four zips.
+3. **smoke**: each zip is unzipped on its own OS (Windows, macOS arm64, macOS
+   Intel, Linux) and started through the real start script with
+   `--no-browser --port 8599`; the job passes once the app's health check
+   answers.
+
+The zips are kept as the run's `bric-zips` artifact (3 days; 14 for releases),
+so any green run's downloads can be tried before releasing.
+
 ## Releasing
 
 1. Bump `version` in `pyproject.toml` and commit (with the updated `pixi.lock`,
    which records the package hash).
 2. Tag and push: `git tag v<version> && git push origin v<version>`.
-3. [`.github/workflows/standalone-release.yml`](../.github/workflows/standalone-release.yml)
-   checks the tag matches the version, builds all zips, starts each one on its
-   own OS (Windows, macOS arm64, macOS Intel, Linux) via the real start script,
-   and attaches the zips to a **draft** GitHub Release.
+3. CI runs as above, also checking the tag matches the version, then the
+   **release** job attaches the zips to a **draft** GitHub Release.
 4. Review the draft release notes and publish. The README's download link
    points at the latest published release.
-
-The workflow can also be run by hand (**Actions → Stand-alone release → Run
-workflow**) to build and smoke-test without releasing; the zips are kept as a
-workflow artifact for 14 days.
 
 ## Notes and limitations
 
