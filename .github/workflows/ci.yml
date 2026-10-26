@@ -105,10 +105,23 @@ jobs:
         shell: pwsh
         run: |
           $dir = (Get-ChildItem -Directory "BRIC-*").FullName
-          Start-Process -FilePath "$dir\Start BRIC.cmd" `
+          $app = Start-Process -FilePath "$dir\Start BRIC.cmd" `
             -ArgumentList "--no-browser", "--port", "8599" `
             -RedirectStandardOutput bric.log -RedirectStandardError bric.err `
-            -NoNewWindow
+            -NoNewWindow -PassThru
+          # Keep the parent step alive so runner cleanup cannot kill the app
+          # while it is still unpacking its first-run environment.
+          try {
+            curl.exe --silent --show-error --fail --max-time 5 `
+              --retry 150 --retry-delay 2 --retry-connrefused --retry-all-errors `
+              http://127.0.0.1:8599/_stcore/health
+            if ($LASTEXITCODE -ne 0) { throw "App health check failed" }
+            curl.exe --silent --show-error --fail --max-time 5 `
+              --output NUL http://127.0.0.1:8599/
+            if ($LASTEXITCODE -ne 0) { throw "App page check failed" }
+          } finally {
+            taskkill.exe /PID $app.Id /T /F
+          }
 
       - name: Start app (macOS / Linux)
         if: runner.os != 'Windows'
@@ -127,6 +140,7 @@ jobs:
           nohup "$script" --no-browser --port 8599 > bric.log 2> bric.err < /dev/null &
 
       - name: Wait for the app to answer
+        if: runner.os != 'Windows'
         run: |
           curl --silent --show-error --fail --max-time 5 \
             --retry 150 --retry-delay 2 --retry-connrefused --retry-all-errors \
