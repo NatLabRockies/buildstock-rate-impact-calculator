@@ -3,7 +3,7 @@ authors = [{name = "Eric Ringold", email = "Eric.Ringold@nlr.gov"}]
 dependencies = []
 name = "buildstock-rate-impact-calculator"
 requires-python = ">=3.11,<3.14"
-version = "0.1.0"
+version = "v0.9.0"
 
 [project.scripts]
 bric = "buildstock_rate_impact_calculator.launcher:main"
