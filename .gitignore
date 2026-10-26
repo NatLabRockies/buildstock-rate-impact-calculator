@@ -2,5 +2,8 @@
 .pixi/*
 !.pixi/config.toml
 __pycache__
-.github
+.github/*
+!.github/workflows/
+# stand-alone builds (pixi run pack)
+/dist/
 /plans

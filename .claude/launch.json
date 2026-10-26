@@ -4,7 +4,7 @@
     {
       "name": "streamlit",
       "runtimeExecutable": "pixi",
-      "runtimeArgs": ["run", "streamlit", "run", "app.py", "--server.headless", "true", "--server.port", "8517"],
+      "runtimeArgs": ["run", "streamlit", "run", "src/buildstock_rate_impact_calculator/app.py", "--server.headless", "true", "--server.port", "8517"],
       "port": 8517
     }
   ]

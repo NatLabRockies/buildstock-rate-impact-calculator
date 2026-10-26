@@ -8,6 +8,8 @@ A Streamlit web application for calculating the electricity bill impact of build
 - Run bill calculations across thousands of simulated buildings
 - Explore results with interactive charts and maps
 
+⬇️ **[Download the app](https://github.com/NatLabRockies/buildstock-rate-impact-calculator/releases/latest)** — stand-alone zips for Windows, macOS and Linux; unzip and double-click, no installation needed (see the installation instructions below)
+
 📖 **[Installation Instructions](docs/bric-installation-instructions.md)** — installation instructions for non-programmers
 
 📖 **[User Guide](docs/user_guide.md)** — workflow walkthrough, how ResStock/ComStock
@@ -73,6 +75,8 @@ Some rate-lookup features require a free API key from OpenEI:
 | Run tests | `pixi run test` |
 | Lint | `pixi run lint` |
 | Fetch utility data | `pixi run fetch-utilities` |
+| Run as the stand-alone app does (free port, opens the browser) | `pixi run bric` |
+| Build the stand-alone zips | `pixi run pack` (see [standalone/README.md](standalone/README.md)) |
 
 ---
 

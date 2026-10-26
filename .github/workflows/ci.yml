@@ -1,0 +1,171 @@
+# CI: run the tests, build the stand-alone BRIC zips, and check each one
+# starts on its own OS. Runs on pull requests, pushes to main and by hand;
+# for a v* tag it also attaches the zips to a draft GitHub Release.
+# See standalone/README.md.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same PR or branch cancels the older run (tags never do).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  PIXI_VERSION: v0.67.0
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: prefix-dev/setup-pixi@v0.11.2
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          locked: true
+          cache: true
+
+      # Integration tests (live OEDI access) are skipped without --integration.
+      - name: Run tests
+        run: pixi run --locked pytest tests/ -q
+
+  pack:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check tag matches pyproject version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version=$(grep -m1 -E '^version = ' pyproject.toml | cut -d'"' -f2)
+          if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match pyproject version $version"
+            exit 1
+          fi
+
+      - uses: prefix-dev/setup-pixi@v0.11.2
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          locked: true
+          cache: true
+
+      # Every platform is packed here: pixi-pack downloads packages from
+      # pixi.lock rather than copying an installed environment.
+      - name: Build zips
+        run: pixi run --locked pack
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bric-zips
+          path: dist/*.zip
+          compression-level: 0  # already compressed
+          # About 1.1 GB per run: keep release builds longer than PR builds.
+          retention-days: ${{ startsWith(github.ref, 'refs/tags/') && 14 || 3 }}
+
+  smoke:
+    needs: pack
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, platform: win-64 }
+          - { os: macos-latest, platform: osx-arm64 }
+          - { os: macos-15-intel, platform: osx-64 }
+          - { os: ubuntu-latest, platform: linux-64 }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: bric-zips
+
+      - name: Unzip
+        run: unzip -q BRIC-*-${{ matrix.platform }}.zip
+
+      # Runs the same start script a user double-clicks: first-run unpack,
+      # then the app on a fixed port without opening a browser.
+      - name: Start app (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dir = (Get-ChildItem -Directory "BRIC-*").FullName
+          $app = Start-Process -FilePath "$dir\Start BRIC.cmd" `
+            -ArgumentList "--no-browser", "--port", "8599" `
+            -RedirectStandardOutput bric.log -RedirectStandardError bric.err `
+            -NoNewWindow -PassThru
+          # Keep the parent step alive so runner cleanup cannot kill the app
+          # while it is still unpacking its first-run environment.
+          try {
+            curl.exe --silent --show-error --fail --max-time 5 `
+              --retry 150 --retry-delay 2 --retry-connrefused --retry-all-errors `
+              http://127.0.0.1:8599/_stcore/health
+            if ($LASTEXITCODE -ne 0) { throw "App health check failed" }
+            curl.exe --silent --show-error --fail --max-time 5 `
+              --output NUL http://127.0.0.1:8599/
+            if ($LASTEXITCODE -ne 0) { throw "App page check failed" }
+          } finally {
+            taskkill.exe /PID $app.Id /T /F
+          }
+
+      - name: Start app (macOS / Linux)
+        if: runner.os != 'Windows'
+        run: |
+          script=
+          for candidate in BRIC-*/"Start BRIC.command" BRIC-*/start-bric.sh; do
+            if [[ -f "$candidate" ]]; then
+              script=$candidate
+              break
+            fi
+          done
+          if [[ -z "$script" ]]; then
+            echo "::error::No start script found in extracted archive"
+            exit 1
+          fi
+          nohup "$script" --no-browser --port 8599 > bric.log 2> bric.err < /dev/null &
+
+      - name: Wait for the app to answer
+        if: runner.os != 'Windows'
+        run: |
+          curl --silent --show-error --fail --max-time 5 \
+            --retry 150 --retry-delay 2 --retry-connrefused --retry-all-errors \
+            http://127.0.0.1:8599/_stcore/health
+          echo
+          curl --silent --show-error --fail http://127.0.0.1:8599/ > /dev/null
+
+      - name: App output
+        if: always()
+        run: cat bric.log bric.err 2>/dev/null || true
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: smoke
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: bric-zips
+
+      # Draft: a maintainer reviews the notes and publishes it.
+      - uses: softprops/action-gh-release@v3
+        with:
+          draft: true
+          generate_release_notes: true
+          files: BRIC-*.zip

@@ -1,2 +1,6 @@
 # SCM syntax highlighting & preventing 3-way merges
 pixi.lock merge=binary linguist-language=YAML linguist-generated=true -diff
+
+# Stand-alone start scripts: batch files need CRLF, shell scripts LF
+standalone/templates/*.cmd text eol=crlf
+standalone/templates/*.sh text eol=lf
