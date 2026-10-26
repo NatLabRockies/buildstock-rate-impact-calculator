@@ -13,7 +13,12 @@ from pathlib import Path
 import pytest
 from streamlit.testing.v1 import AppTest
 
-APP_PATH = Path(__file__).resolve().parents[2] / "app.py"
+APP_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "src"
+    / "buildstock_rate_impact_calculator"
+    / "app.py"
+)
 
 
 def test_app_boots_on_dataset_step() -> None:
