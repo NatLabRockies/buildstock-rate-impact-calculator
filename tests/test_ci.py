@@ -2,14 +2,13 @@
 
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import textwrap
 
 import pytest
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="Release check uses Bash")
+@pytest.mark.skipif(os.name == "nt", reason="Release check uses Bash")
 @pytest.mark.parametrize("version", ["0.9.0", "v0.9.0"])
 @pytest.mark.parametrize("tag", ["v0.9.0", "v0.9.1"])
 def test_release_version_check(tmp_path: Path, version: str, tag: str) -> None:
