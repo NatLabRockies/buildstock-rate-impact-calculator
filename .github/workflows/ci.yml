@@ -52,7 +52,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
           version=$(grep -m1 -E '^version = ' pyproject.toml | cut -d'"' -f2)
-          if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+          if [ "${GITHUB_REF_NAME#v}" != "${version#v}" ]; then
             echo "::error::Tag $GITHUB_REF_NAME does not match pyproject version $version"
             exit 1
           fi
