@@ -1,6 +1,8 @@
 [project]
 authors = [{name = "Eric Ringold", email = "Eric.Ringold@nlr.gov"}]
 dependencies = []
+# A modified BSD-3-Clause (extra clauses 3 and 4), so no SPDX license expression.
+license-files = ["LICENSE.md"]
 name = "buildstock-rate-impact-calculator"
 requires-python = ">=3.11,<3.14"
 version = "v0.9.0"

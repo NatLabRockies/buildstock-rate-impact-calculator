@@ -76,6 +76,14 @@ def test_write_text_line_endings(tmp_path: Path) -> None:
     assert (tmp_path / "a.sh").read_bytes() == b"a\nb\n"
 
 
+@pytest.mark.parametrize("windows", [True, False])
+def test_write_license_copies_notice(tmp_path: Path, windows: bool) -> None:
+    build_dist.write_license(tmp_path, windows)
+    data = (tmp_path / "LICENSE.txt").read_bytes()
+    assert b"Alliance for Energy Innovation" in data
+    assert (b"\r\n" in data) == windows
+
+
 def test_zip_folder_keeps_exec_bits_and_stores_tar(tmp_path: Path) -> None:
     folder = tmp_path / "BRIC-1-osx-arm64"
     folder.mkdir()
@@ -121,3 +129,4 @@ def test_wheel_contains_app_launcher_and_data(tmp_path: Path) -> None:
     ):
         assert pkg + rel in names
     assert "bric = buildstock_rate_impact_calculator.launcher:main" in entry_points
+    assert any(n.endswith(".dist-info/licenses/LICENSE.md") for n in names)

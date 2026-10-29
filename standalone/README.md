@@ -16,7 +16,8 @@ BRIC-<version>-<platform>/
 ├── Start BRIC.cmd | Start BRIC.command | start-bric.sh   ← from templates/
 ├── environment.tar     packed conda + PyPI packages, incl. this project's wheel
 ├── pixi-unpack[.exe]   unpacker for the platform (Quantco/pixi-pack release)
-└── README.txt          from templates/README.txt
+├── README.txt          from templates/README.txt
+└── LICENSE.txt         copy of LICENSE.md (its clause 2 covers binary redistribution)
 ```
 
 When the user double-clicks the start script:

@@ -28,3 +28,5 @@ More information
 ----------------
 User guide and source code:
 https://github.com/NatLabRockies/buildstock-rate-impact-calculator
+
+License: see LICENSE.txt.

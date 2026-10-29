@@ -34,6 +34,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES = Path(__file__).resolve().parent / "templates"
+LICENSE = REPO_ROOT / "LICENSE.md"
 
 # Keep the packer and unpacker on the same release.
 PIXI_PACK_VERSION = "0.7.11"
@@ -137,6 +138,12 @@ def write_text(path: Path, text: str, windows: bool) -> None:
     # Batch files misbehave (labels, goto) with LF line endings.
     newline = "\r\n" if windows else "\n"
     path.write_bytes(text.replace("\r\n", "\n").replace("\n", newline).encode("utf-8"))
+
+
+def write_license(stage: Path, windows: bool) -> None:
+    # The license's clause 2 requires binary redistributions to carry the
+    # notice. As .txt it opens in Notepad/TextEdit with a double-click.
+    write_text(stage / "LICENSE.txt", LICENSE.read_text(encoding="utf-8"), windows)
 
 
 def zip_folder(folder: Path, zip_path: Path, executables: set[str]) -> None:
@@ -266,6 +273,7 @@ def build_platform(
         security_note=target.security_note,
     )
     write_text(stage / "README.txt", readme, target.is_windows)
+    write_license(stage, target.is_windows)
 
     zip_path = dist / f"{name}.zip"
     zip_folder(stage, zip_path, executables={target.start_file, target.unpack_name})
