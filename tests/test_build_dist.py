@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import stat
 import sys
+import tomllib
 import zipfile
 from pathlib import Path
 
@@ -24,6 +25,14 @@ _spec.loader.exec_module(build_dist)
 
 def test_project_version_reads_pyproject() -> None:
     assert build_dist.project_version()
+
+
+def test_packed_environment_leaves_out_dev_tools() -> None:
+    with (build_dist.REPO_ROOT / "pyproject.toml").open("rb") as f:
+        pixi = tomllib.load(f)["tool"]["pixi"]
+    env = pixi["environments"][build_dist.PACKED_ENVIRONMENT]
+    assert "dev" not in env["features"]
+    assert "pytest" in pixi["feature"]["dev"]["dependencies"]
 
 
 def test_render_template_replaces_placeholders() -> None:
@@ -121,8 +130,8 @@ def test_wheel_contains_app_launcher_and_data(tmp_path: Path) -> None:
     for rel in (
         "app.py",
         "launcher.py",
-        "data/cb_2019_us_county_500k.geojson",
-        "data/cb_2019_us_puma10_500k.geojson",
+        "data/us_counties.geojson",
+        "data/us_pumas_2010.geojson",
         "data/us_states.geojson",
         "data/eia_to_county.csv",
         "data/utility_companies.csv",

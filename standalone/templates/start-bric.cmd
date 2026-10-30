@@ -40,6 +40,10 @@ echo.
 if exist "%INSTALL%" rmdir /s /q "%INSTALL%"
 "%HERE%pixi-unpack.exe" "%HERE%environment.tar" --output-directory "%INSTALL%" --shell cmd
 if errorlevel 1 goto setup_failed
+rem Import libraries (.lib) and C headers are only used to compile against the
+rem environment, never to run the app.
+del /s /q "%INSTALL%\env\*.lib" >nul 2>&1
+for %%I in ("%INSTALL%\env\include" "%INSTALL%\env\Library\include") do if exist %%I rmdir /s /q %%I
 echo %BRIC_BUILD%> "%MARKER%"
 
 rem Remove environments left by older versions (about 2 GB each).
