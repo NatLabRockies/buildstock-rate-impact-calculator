@@ -57,6 +57,10 @@ if [ "$(cat "$MARKER" 2>/dev/null)" != "$BRIC_BUILD" ]; then
     xattr -d com.apple.quarantine "$UNPACK" 2>/dev/null
     rm -rf "$INSTALL"
     "$UNPACK" "$HERE/environment.tar" --output-directory "$INSTALL" --shell bash || setup_failed
+    # Static libraries and C headers are only used to compile against the
+    # environment, never to run the app.
+    find "$INSTALL/env" -type f -name '*.a' -delete 2>/dev/null
+    rm -rf "$INSTALL/env/include"
     echo "$BRIC_BUILD" > "$MARKER"
 
     # Remove environments left by older versions (about 2 GB each).

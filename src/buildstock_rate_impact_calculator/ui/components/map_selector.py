@@ -31,8 +31,8 @@ except ImportError:
 # All boundary layers are bundled as package data.
 _DATA_PKG = "buildstock_rate_impact_calculator.data"
 _STATES_GEOJSON_FILE = "us_states.geojson"
-_COUNTY_GEOJSON_FILE = "cb_2019_us_county_500k.geojson"
-_PUMA_GEOJSON_FILE = "cb_2019_us_puma10_500k.geojson"
+_COUNTY_GEOJSON_FILE = "us_counties.geojson"
+_PUMA_GEOJSON_FILE = "us_pumas_2010.geojson"
 
 # Keyless basemap (xyzservices name). CARTO tiles now require an API key.
 _BASEMAP_TILES = "Esri.WorldGrayCanvas"

@@ -23,20 +23,12 @@ python = ">=3.11,<3.14"
 # 1.42+ bundle mimalloc 3.3.2, which crashes on Windows when threads exit
 # (access violation in _polars_runtime.pyd; pola-rs/polars#29883).
 polars = "==1.41.2"
-fsspec = "*"
 requests = "*"
 numpy = "*"
-# Streamlit excludes pyarrow 25.0.0
-pyarrow = "!=25.0.0"
 tqdm = "*"
 python-dotenv = "*"
-pytest = "*"
-pytest-mock = "*"
-ruff = "*"
 certifi = "*"
 python-dateutil = "*"
-aiohttp = "*"
-s3fs = "*"
 pip-system-certs = ">=5.3,<6"
 
 [tool.pixi.pypi-dependencies]
@@ -48,6 +40,26 @@ streamlit = ">=1.66"
 streamlit-folium = "*"
 folium = "*"
 altair = "*"
+# From PyPI rather than conda-forge: conda-forge's libarrow brings S3, GCS and
+# Azure client libraries (grpc, protobuf, OpenTelemetry, AWS SDK; ~650 MB
+# installed) that BRIC never uses. Streamlit excludes pyarrow 25.0.0.
+pyarrow = "!=25.0.0"
+
+# conda-forge numpy uses MKL on Windows by default (~600 MB installed with its
+# tbb/hwloc/icu dependencies); BRIC does little linear algebra.
+[tool.pixi.target.win-64.dependencies]
+libblas = { version = "*", build = "*openblas" }
+
+# Development tools, kept out of the "standalone" environment that the
+# stand-alone zips ship (standalone/build_dist.py packs that one).
+[tool.pixi.feature.dev.dependencies]
+pytest = "*"
+pytest-mock = "*"
+ruff = "*"
+
+[tool.pixi.environments]
+default = { features = ["dev"], solve-group = "default" }
+standalone = { features = [], solve-group = "default" }
 
 [tool.pixi.tasks]
 test = "pytest tests/ -v"

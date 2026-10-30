@@ -44,7 +44,7 @@ Open the extracted folder and double-click:
 
 A window with some text opens, followed by the app in your web browser.
 
-The **first time** you start a new version, the app sets itself up before opening. This takes a minute or two and needs about 2.5 GB of free disk space. Later starts take a few seconds.
+The **first time** you start a new version, the app sets itself up before opening. This takes a minute or so and needs about 1.5 GB of free disk space. Later starts take a few seconds.
 
 To stop the app, click **⏻ Quit app** at the bottom of the app's sidebar, or close the text window. The app also stops on its own about 2 minutes after you close its browser tab.
 

@@ -35,6 +35,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES = Path(__file__).resolve().parent / "templates"
 LICENSE = REPO_ROOT / "LICENSE.md"
+# The pixi environment without the dev feature (pytest, ruff).
+PACKED_ENVIRONMENT = "standalone"
 
 # Keep the packer and unpacker on the same release.
 PIXI_PACK_VERSION = "0.7.11"
@@ -230,6 +232,8 @@ def pack_environment(
             f"pixi-pack=={PIXI_PACK_VERSION}",
             "pixi-pack",
             str(REPO_ROOT / "pyproject.toml"),
+            "--environment",
+            PACKED_ENVIRONMENT,
             "--platform",
             platform,
             "--ignore-pypi-non-wheel",

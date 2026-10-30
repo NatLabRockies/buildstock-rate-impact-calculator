@@ -91,7 +91,7 @@ def _county_gisjoins_by_state() -> dict[str, tuple[str, ...]]:
     )
 
     data_path = files("buildstock_rate_impact_calculator.data").joinpath(
-        "cb_2019_us_county_500k.geojson"
+        "us_counties.geojson"
     )
     with data_path.open("r", encoding="utf-8") as fh:
         geojson = json.load(fh)

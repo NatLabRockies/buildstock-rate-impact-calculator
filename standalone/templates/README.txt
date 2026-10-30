@@ -6,7 +6,7 @@ Start the app
 Double-click "@START_FILE@". The app opens in your web browser.
 
 The first time you start a new version, it sets itself up. This takes a
-minute or two and needs about 2.5 GB of free disk space. Later starts are quick.
+minute or so and needs about 1.5 GB of free disk space. Later starts are quick.
 
 Closing the browser tab stops the app (after about two minutes), as does the
 "Quit app" button in the app's sidebar or closing the terminal window.

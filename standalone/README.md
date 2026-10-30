@@ -29,7 +29,8 @@ When the user double-clicks the start script:
    marker holding the build ID (a hash of `environment.tar`, baked into the
    start script by `build_dist.py`). A missing marker (interrupted setup) or a
    different build ID (a rebuilt zip of the same version) is unpacked again.
-   Other versions' folders are then deleted. About 1–2 minutes and 2.3 GB
+   Import/static libraries and C headers, which only matter for compiling,
+   are deleted, then other versions' folders. Under a minute and about 800 MB
    (Windows). The environment is not unpacked beside the script:
    Desktop/Documents are often OneDrive-synced, and an unpacked environment
    can't be moved.
@@ -66,7 +67,8 @@ pixi run pack --platform win-64       # one platform (repeatable)
 ```
 
 Any platform can be packed from any OS. Downloads are cached in `dist/.cache/`.
-Each zip is about 400 MB.
+Each zip is about 200 MB (Windows). They pack the `standalone` pixi
+environment: the default one minus the `dev` feature (pytest, ruff).
 
 To try a build without touching your real install folder, extract the zip and
 run the start script with `LOCALAPPDATA` (Windows) or `HOME` (macOS/Linux)
@@ -123,10 +125,23 @@ so any green run's downloads can be tried before releasing.
   startup.
 - **pixi-pack version.** `PIXI_PACK_VERSION` in `build_dist.py` pins both
   pixi-pack and the bundled pixi-unpack; keep them on the same release.
-- **Size.** About 500 MB of the unpacked Windows environment is Intel MKL
-  (numpy's BLAS), and pyarrow brings gRPC/protobuf libraries. Pinning BLAS to
-  OpenBLAS and moving dev tools (pytest, ruff) to a separate pixi feature would
-  shrink it.
+- **Size.** These choices keep the Windows install near 800 MB rather than
+  2.3 GB (and the zip at 200 MB rather than 400 MB):
+  - numpy uses OpenBLAS on Windows, not conda-forge's default Intel MKL
+    (~600 MB installed with its tbb/hwloc/icu dependencies).
+  - pyarrow comes from PyPI. conda-forge's `libarrow` links S3, GCS and Azure
+    clients (gRPC, protobuf, OpenTelemetry, AWS SDK: ~650 MB) that BRIC never
+    uses; the PyPI wheel bundles a much smaller build.
+  - Dev tools are in the `dev` feature, which the zips leave out.
+  - No s3fs/fsspec (botocore alone is ~120 MB). Polars reads OEDI's bucket
+    with its own S3 client (`storage_options=_S3_ANON`); other downloads use
+    `requests`.
+  - The county and PUMA map files are simplified from the Census 1:500k
+    originals (9 MB rather than 54 MB) by
+    [`scripts/simplify_boundaries.py`](../scripts/simplify_boundaries.py).
+
+  What remains is mostly polars (200 MB), PySAM (170 MB), Python itself and
+  Streamlit.
 - **The app script lives in the package** (`src/buildstock_rate_impact_calculator/app.py`)
   so it ships in the wheel. Streamlit re-executes it on every interaction, so
   don't add a root-level `app.py` that merely imports it.
