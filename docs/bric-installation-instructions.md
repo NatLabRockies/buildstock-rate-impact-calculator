@@ -19,7 +19,7 @@ There are two ways to install the app:
 
 ### Download
 
-1. Go to the latest release: <https://github.com/NatLabRockies/buildstock-rate-impact-calculator/releases/latest>
+1. Go to the Releases page and find the newest release at the top: <https://github.com/NatLabRockies/buildstock-rate-impact-calculator/releases>
 2. Under **Assets**, download the zip file for your computer:
 
    | Computer | File |

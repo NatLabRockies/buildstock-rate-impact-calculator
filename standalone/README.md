@@ -101,7 +101,9 @@ so any green run's downloads can be tried before releasing.
 3. CI runs as above, also checking the tag matches the version, then the
    **release** job attaches the zips to a **draft** GitHub Release.
 4. Review the draft release notes and publish. The README's download link
-   points at the latest published release.
+   points at the Releases page, which lists pre-releases too. GitHub's
+   `releases/latest` URL skips pre-releases, so don't link to it while the
+   newest release is a pre-release.
 
 ## Notes and limitations
 
