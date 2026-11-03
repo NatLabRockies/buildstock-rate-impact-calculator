@@ -3,7 +3,7 @@
 Builds the zips that let users run BRIC without installing pixi or Python:
 unzip, double-click `Start BRIC`, and the app opens in the browser. User-facing
 instructions are in
-[docs/bric-installation-instructions.md](../docs/bric-installation-instructions.md#option-1--download-the-app-recommended).
+[the BRIC installation guide](https://natlabrockies.github.io/ComStock.github.io/docs/for_developers/bric_installation.html#option-1-download-the-app-recommended).
 
 ## How it works
 

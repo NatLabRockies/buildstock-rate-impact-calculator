@@ -10,9 +10,9 @@ A Streamlit web application for calculating the electricity bill impact of build
 
 ⬇️ **[Download the app](https://github.com/NatLabRockies/buildstock-rate-impact-calculator/releases)** — stand-alone zips for Windows, macOS and Linux; unzip and double-click, no installation needed
 
-📖 **[Installation Instructions](docs/bric-installation-instructions.md)** — step-by-step installation instructions for non-programmers
+📖 **[Installation Instructions](https://natlabrockies.github.io/ComStock.github.io/docs/for_developers/bric_installation.html)** — step-by-step installation instructions for non-programmers
 
-📖 **[User Guide](docs/user_guide.md)** — workflow walkthrough, how ResStock/ComStock
+📖 **[User Guide](https://natlabrockies.github.io/ComStock.github.io/docs/resources/how_to_guides/bric_rate_impact_calculator.html#before-you-start)** — workflow walkthrough, how ResStock/ComStock
 sampling weights work, and guidance on interpreting every results section.
 
 ---
@@ -45,7 +45,7 @@ There are two ways to install the app:
 
 The app opens in your web browser. The first time you start a new version, it sets itself up, which takes a minute or so and needs about 1.5 GB of free disk space.
 
-See the [Installation Instructions](docs/bric-installation-instructions.md#option-1--download-the-app-recommended) for security warnings, updating, uninstalling and troubleshooting.
+See the [Installation Instructions](https://natlabrockies.github.io/ComStock.github.io/docs/for_developers/bric_installation.html#option-1-download-the-app-recommended) for security warnings, updating, uninstalling and troubleshooting.
 
 ### Option 2 – Run from source with pixi
 
