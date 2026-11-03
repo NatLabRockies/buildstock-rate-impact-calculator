@@ -163,6 +163,13 @@ jobs:
         with:
           name: bric-zips
 
+      # Stable names for releases/latest/download/<name> links (used by the ComStock website).
+      - name: Add version-less copies of the zips
+        run: |
+          for p in win-64 osx-arm64 osx-64 linux-64; do
+            cp BRIC-*-"$p".zip "BRIC-$p.zip"
+          done
+
       # Draft: a maintainer reviews the notes and publishes it.
       - uses: softprops/action-gh-release@v3
         with:

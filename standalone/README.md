@@ -3,7 +3,7 @@
 Builds the zips that let users run BRIC without installing pixi or Python:
 unzip, double-click `Start BRIC`, and the app opens in the browser. User-facing
 instructions are in
-[docs/bric-installation-instructions.md](../docs/bric-installation-instructions.md#option-1--download-the-app-recommended).
+[the BRIC installation guide](https://natlabrockies.github.io/ComStock.github.io/docs/for_developers/bric_installation.html#option-1-download-the-app-recommended).
 
 ## How it works
 
@@ -99,9 +99,25 @@ so any green run's downloads can be tried before releasing.
    which records the package hash).
 2. Tag and push: `git tag v<version> && git push origin v<version>`.
 3. CI runs as above, also checking the tag matches the version, then the
-   **release** job attaches the zips to a **draft** GitHub Release.
-4. Review the draft release notes and publish. The README's download link
-   points at the latest published release.
+   **release** job attaches the zips to a **draft** GitHub Release. It
+   attaches each zip twice: the versioned `BRIC-v<version>-<platform>.zip`
+   and a version-less copy, `BRIC-<platform>.zip`.
+4. Review the draft release notes and publish it as a full release: leave
+   **Set as a pre-release** unchecked and check **Set as the latest
+   release**. Then confirm it is the latest:
+   `gh api repos/NatLabRockies/buildstock-rate-impact-calculator/releases/latest --jq .tag_name`
+   should print the new tag.
+
+The ComStock website's BRIC installation page links to
+`releases/latest/download/BRIC-<platform>.zip`, so it always serves the newest
+release without an edit. Those links only work while both rules hold:
+
+- **The newest release is a full release.** GitHub's `releases/latest` skips
+  pre-releases, so publishing one as a pre-release breaks every link.
+- **The four version-less names stay exactly** `BRIC-win-64.zip`,
+  `BRIC-osx-arm64.zip`, `BRIC-osx-64.zip` and `BRIC-linux-64.zip`. Renaming
+  a platform or dropping the copy step in `.github/workflows/ci.yml` breaks
+  the website's links.
 
 ## Notes and limitations
 
