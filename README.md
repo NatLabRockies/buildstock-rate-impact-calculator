@@ -107,3 +107,5 @@ Some rate-lookup features require a free API key from OpenEI:
 ## License
 
 See [LICENSE](LICENSE.md) for details.
+
+**NLR Software Record**: SWR-27-025 (Ringold, Eric; Klun, Lauren, "BuildStock Rate Impact Calculator", NLR Github 2026)
